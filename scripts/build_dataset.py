@@ -5,6 +5,7 @@ import pandas as pd
 from parse_lib import parse_inv_arc_A_Y_auto
 from spi2graph import parse_transistors_spice, extract_wl_features
 
+
 def bilinear_interp(x_grid, y_grid, Z, x_new, y_new):
     X, Y = np.array(x_grid), np.array(y_grid)
     Z = np.array(Z)
