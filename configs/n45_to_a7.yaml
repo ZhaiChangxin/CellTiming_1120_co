@@ -1,0 +1,16 @@
+
+data:
+  src_lib: data/lib/Nangate45/INVX1.lib
+  tgt_lib: data/lib/ASAP7/INVX1.lib
+  src_spi: data/spi/Nangate45/INVX1.spi
+  tgt_spi: data/spi/ASAP7/INVX1.sp
+  out_dir: outputs
+  grid_slew: 12
+  grid_cap: 12
+  target_label_ratio: 0.1
+train:
+  epochs: 120
+  batch: 256
+  lr: 0.002
+  hid: 128
+  cmd_k: 5
