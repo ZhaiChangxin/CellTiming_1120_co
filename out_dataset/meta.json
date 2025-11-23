@@ -1,0 +1,39 @@
+{
+  "src_spi": "data\\spi\\Nangate45\\INVX1.spi",
+  "tgt_sp": "data\\spi\\ASAP7\\INVX1.sp",
+  "num_src": 3009,
+  "num_tgt_l": 234,
+  "num_tgt_u": 2111,
+  "feature_cols": [
+    "cell_type",
+    "pol",
+    "slew",
+    "cap",
+    "voltage",
+    "temp",
+    "wp_over_wn",
+    "wp_sum",
+    "wn_sum",
+    "is_inv",
+    "stack_pu",
+    "stack_pd",
+    "log_slew",
+    "log_cap",
+    "req_p",
+    "req_n",
+    "rc_p",
+    "rc_n",
+    "rc_eff",
+    "req_eff",
+    "inv_v",
+    "inv_temp",
+    "pn_balance"
+  ],
+  "cell_types": [
+    "INVX1",
+    "INVX2",
+    "NANDX1",
+    "NORX1",
+    "XORX1"
+  ]
+}
