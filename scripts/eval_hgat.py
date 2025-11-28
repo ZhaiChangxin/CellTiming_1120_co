@@ -1,4 +1,4 @@
-# eval.py  —— 直接整文件替换本脚本
+# eval_hgat.py  —— 直接整文件替换本脚本
 
 import os, json, argparse
 import numpy as np
@@ -238,7 +238,7 @@ def main():
     # 不再检查 split_design.*（HGAT 采用外部 z，本来就没有这层）
 
     # 允许 BN/缓冲区的轻微不一致，但关键层必须存在
-    # —— 原地替换 eval.py 中的这段检查逻辑 —— 参考位置在 load_state_dict 之后
+    # —— 原地替换 eval_hgat.py 中的这段检查逻辑 —— 参考位置在 load_state_dict 之后
     model.eval()
 
     preds, gts = [], []

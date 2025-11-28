@@ -32,7 +32,7 @@ class HGATDesignEncoder(nn.Module):
             mos = [v.mean(dim=0, keepdim=True) for v in h.values()]
         z = torch.mean(torch.cat(mos, dim=0), dim=0)
         return self.readout(z)
-# hgat.py - 追加以下辅助函数（直接复用 train.py 的逻辑）
+# hgat.py - 追加以下辅助函数（直接复用 train_hgat.py 的逻辑）
 def build_dgl_graph_from_devs(devs, top_pins):
     import dgl, torch, numpy as np
     nets = {}

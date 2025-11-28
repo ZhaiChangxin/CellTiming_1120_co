@@ -2,10 +2,12 @@
 import re, os
 import numpy as np
 
+#读文件函数
 def _read(path):
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         return f.read()
 
+#单位转换函数
 def _to_m(val, unit):
     if unit is None or unit == "":
         return float(val)
@@ -17,6 +19,9 @@ def _to_m(val, unit):
     if u in ["k"]: return float(val)*1e3
     return float(val)
 
+#功能: 解析SPICE网表文本中的MOS晶体管信息
+#输入: text - 包含SPICE网表内容的字符串
+#输出: 包含晶体管信息字典的列表，每个晶体管信息包括名称、端口连接、类型和尺寸参数
 def parse_transistors_spice(text):
     devs = []
     for line in text.splitlines():
@@ -51,6 +56,9 @@ def parse_transistors_spice(text):
         devs.append({"name": name, "d": d, "g": g, "s": sr, "b": b, "type": t, "W": W, "L": L})
     return devs
 
+#功能: 解析SPICE网表文本中的子ckt信息
+#输入: text - 包含SPICE网表内容的字符串
+#输出: ckt_name - 子ckt名称
 def parse_top_subckt_pins(text, cell_hint_regex=r'INV.*1'):
     subs = []
     for m in re.finditer(r'(?im)^\s*\.subckt\s+([^\s]+)\s+(.*)$', text):
