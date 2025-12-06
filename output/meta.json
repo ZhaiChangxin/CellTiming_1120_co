@@ -1,12 +1,12 @@
 {
   "src_spi_by_cell": {
-    "INVX1": "data\\spi\\Nangate45\\INV_X1_lpe.spi",
-    "INVX2": "data\\spi\\Nangate45\\INV_X2_lpe.spi",
-    "NANDX1": "data\\spi\\Nangate45\\NAND2_X1_lpe.spi",
-    "NORX1": "data\\spi\\Nangate45\\NOR2_X1_lpe.spi",
-    "XORX1": "data\\spi\\Nangate45\\XOR2_X1_lpe.spi"
+    "INVX1": "data\\spi\\Nangate45\\inv_x1_lpe.spi",
+    "INVX2": "data\\spi\\Nangate45\\inv_x2_lpe.spi",
+    "NANDX1": "data\\spi\\Nangate45\\nand2_x1_lpe.spi",
+    "NORX1": "data\\spi\\Nangate45\\nor2_x1_lpe.spi",
+    "XORX1": "data\\spi\\Nangate45\\xor2_x1_lpe.spi"
   },
-  "tgt_sp_file": "data\\spi\\ASAP7\\asap7sc6t_26_L_211010.sp",
+  "tgt_sp_file": "data\\spi\\ASAP7\\asap7sc6t_26_l_211010.sp",
   "tgt_subckt_by_cell": {
     "INVX1": "INVx1_ASAP7_6t_L",
     "INVX2": "INVx2_ASAP7_6t_L",
