@@ -1,6 +1,6 @@
-
 import torch
 import torch.nn as nn
+from torch.nn import functional as F
 from spi2graph import parse_transistors_spice, parse_top_subckt_pins
 try:
     import dgl
@@ -25,14 +25,17 @@ class HGATDesignEncoder(nn.Module):
         h = self.layer2(g, h)
         h = {k: v.mean(1) for k, v in h.items()}
         mos = []
-        for nt in ["PMOS","NMOS"]:
+        for nt in ["PMOS", "NMOS"]:
             if nt in h and h[nt].shape[0] > 0:
                 mos.append(h[nt].mean(dim=0, keepdim=True))
         if len(mos) == 0:
             mos = [v.mean(dim=0, keepdim=True) for v in h.values()]
         z = torch.mean(torch.cat(mos, dim=0), dim=0)
-        return self.readout(z)
-# hgat.py - 追加以下辅助函数（直接复用 train.py 的逻辑）
+        z = self.readout(z)
+        # ★ 新增：L2 归一化，使设计嵌入的尺度受控
+        z = F.normalize(z, dim=0)
+        return z
+# hgat.py - 追加以下辅助函数（直接复用 train_hgat.py 的逻辑）
 def build_dgl_graph_from_devs(devs, top_pins):
     import dgl, torch, numpy as np
     nets = {}
@@ -80,8 +83,15 @@ def build_dgl_graph_from_devs(devs, top_pins):
     def mos_feats(list_dev):
         arr = []
         for d in list_dev:
-            W = d["W"] if d["W"] is not None else 0.0
-            L = d["L"] if d["L"] is not None else 0.0
+            # 修改：将单位从 米(m) 转换为 微米(um)，放大 1e6 倍
+            # 原始: 1.8e-7 -> 神经网络认为是 0
+            # 修改: 0.18   -> 神经网络认为是有意义的特征
+            raw_W = d["W"] if d["W"] is not None else 0.0
+            raw_L = d["L"] if d["L"] is not None else 0.0
+
+            W = raw_W * 1e6
+            L = raw_L * 1e6
+
             arr.append([W, L])
         if len(arr)==0:
             return torch.zeros((0,2), dtype=torch.float32)
