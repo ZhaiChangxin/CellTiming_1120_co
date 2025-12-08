@@ -1,3 +1,5 @@
+# === Python代码文件: build_dataset.py (已修改) ===
+
 import argparse
 import os
 import json
@@ -56,8 +58,13 @@ def parse_spi_features_from_text(text: str) -> Dict[str, float]:
     devs = parse_transistors_spice(text)
     feats = extract_wl_features(devs)
 
-    wp_sum = float(feats.get("wp_sum", 0.0))
-    wn_sum = float(feats.get("wn_sum", 0.0))
+    # ------------------  【关键修改】 ------------------
+    # 将 W/L 从米(m)转换为微米(um)，与 hgat.py 中的特征处理保持一致
+    # 原始值例如 1.8e-7 (m)，转换后为 0.18 (um)，是更合理的数值尺度
+    # 这可以防止后续计算的 req_p (1/wp_sum) 等特征值爆炸
+    # ----------------------------------------------------
+    wp_sum = float(feats.get("wp_sum", 0.0)) * 1e6
+    wn_sum = float(feats.get("wn_sum", 0.0)) * 1e6
     wp_over_wn = float(feats.get("wp_over_wn", 0.0) if wn_sum != 0 else 0.0)
 
     return {
