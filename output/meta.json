@@ -4,7 +4,7 @@
     "INVX2": "data\\spi\\Nangate45\\inv_x2_lpe.spi",
     "NANDX1": "data\\spi\\Nangate45\\nand2_x1_lpe.spi",
     "NORX1": "data\\spi\\Nangate45\\nor2_x1_lpe.spi",
-    "XORX1": "data\\spi\\Nangate45\\xor2_x1_lpe.spi"
+    "XORX2": "data\\spi\\Nangate45\\xor2_x2_lpe.spi"
   },
   "tgt_sp_file": "data\\spi\\ASAP7\\asap7sc6t_26_l_211010.sp",
   "tgt_subckt_by_cell": {
@@ -12,11 +12,11 @@
     "INVX2": "INVx2_ASAP7_6t_L",
     "NANDX1": "NAND2x1_ASAP7_6t_L",
     "NORX1": "NOR2x1_ASAP7_6t_L",
-    "XORX1": "XOR2xp5_ASAP7_6t_L"
+    "XORX2": "XOR2x2_ASAP7_6t_L"
   },
-  "num_src": 3009,
-  "num_tgt_l": 234,
-  "num_tgt_u": 2111,
+  "num_src": 970,
+  "num_tgt_l": 98,
+  "num_tgt_u": 882,
   "feature_cols": [
     "cell_type",
     "pol",
@@ -47,6 +47,6 @@
     "INVX2",
     "NANDX1",
     "NORX1",
-    "XORX1"
+    "XORX2"
   ]
 }

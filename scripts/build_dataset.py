@@ -17,7 +17,7 @@ from spi2graph import parse_transistors_spice, extract_wl_features
 # 配置：要保留的 cell 类型
 # ======================================================
 
-TARGET_CELL_TYPES = ["INVX1", "INVX2", "NANDX1", "NORX1", "XORX1"]
+TARGET_CELL_TYPES = ["INVX1", "INVX2", "NANDX1", "NORX1", "XORX2"]
 
 # -------- 源域（Nangate）每个 cell 对应一个 SPI 文件 --------
 SRC_CELL_SPI_FILES = {
@@ -25,7 +25,7 @@ SRC_CELL_SPI_FILES = {
     "INVX2": "INV_X2_lpe.spi",
     "NANDX1": "NAND2_X1_lpe.spi",
     "NORX1": "NOR2_X1_lpe.spi",
-    "XORX1": "XOR2_X1_lpe.spi",
+    "XORX2": "XOR2_X2_lpe.spi",
 }
 
 # -------- 目标域（ASAP7）大 SP 文件里的 subckt 名 --------
@@ -37,7 +37,7 @@ ASAP7_CELL_SUBCKT = {
     "NORX1": "NOR2x1_ASAP7_6t_L",
     # XORX1 在 SIMPLE lib 中对应 XOR2xp5_ASAP7_6t_L，
     # 如果 lib 里没有 XORX1 的 arc，这个映射不会被实际用到。
-    "XORX1": "XOR2xp5_ASAP7_6t_L",
+    "XORX2": "XOR2x2_ASAP7_6t_L",
 }
 
 ZERO_SPI_FEATS = {

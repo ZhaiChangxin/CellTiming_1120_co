@@ -59,7 +59,7 @@ def parse_transistors_spice(text):
 #功能: 解析SPICE网表文本中的子ckt信息
 #输入: text - 包含SPICE网表内容的字符串
 #输出: ckt_name - 子ckt名称
-def parse_top_subckt_pins(text, cell_hint_regex=r'INV.*1'):
+def parse_top_subckt_pins(text, cell_hint_regex=r'*INVx1_ASAP7_6t*' or ):
     subs = []
     for m in re.finditer(r'(?im)^\s*\.subckt\s+([^\s]+)\s+(.*)$', text):
         name = m.group(1); pins = m.group(2)

@@ -334,41 +334,83 @@ def _find_all_timing_arcs(pin_block: str):
 
 def canonical_cell_type(cell_name: str):
     """
-    功能：把 lib 里的 cell_name 归一成我们想用的 5 种 cell_type：
-      INVX1, INVX2, NANDX1, NORX1, XORX1
+    功能：把 lib 里的 cell_name 精确归一成我们想用的 5 种 cell_type：
+      INVX1, INVX2, NANDX1, NORX1, XORX2
 
-    例如：
-      "INV_X1"   -> "INVX1"
-      "NAND2_X1" -> "NANDX1"
-      "NOR4_X1"  -> "NORX1"
-      "XOR2_X1"  -> "XORX1"
+    针对不同工艺库进行精确匹配：
 
-    这里是非常粗暴的字符串匹配（大写后查包含关系）。
+    ASAP7:
+      INVx1_ASAP7_6t_L: 匹配 INVx1_ (需与 INVx11_ASAP7_6t_L, INVx13_ASAP7_6t_L 区分)
+      INVx2_ASAP7_6t_L: 匹配 INVx2_
+      XOR2x2_ASAP7_6t_L: 匹配 XOR2x2_ (替换原来的 XORX1 为 XORX2)
+      NAND2x1_ASAP7_6t_L: 匹配 NAND2x1_ (必须加下划线，区分 NAND2x1p5_ASAP7_6t_L)
+      NOR2x1_ASAP7_6t_L: 匹配 NOR2x1_
+
+    Nangate45:
+      INV_X1: 匹配 INV_X1 (需与 INV_X16, TINVX1 区分)
+      INVX2: 匹配 INVX2
+      XOR2_X2: 匹配 XOR2_X2
+      NAND2_X1: 匹配 NAND2_X1
+      NOR2_X1: 匹配 NOR2_X1 (需与 XNOR2_X1 区分)
     """
     n = cell_name.upper().replace('"', '').replace(" ", "")
 
+    # 判断是否为 ASAP7 工艺库
+    is_asap7 = "ASAP7" in n
+
     # 排除 INVBUF 之类（里面有 BUF 的）
     if "INV" in n and "BUF" not in n:
-        # INVX1: 兼容 INV_X1 / INV1_X1 / INVX1 等，要求有 X1 且没有 X2
-        if "X1" in n and "X2" not in n:
-            return "INVX1"
-        # INVX2: 有 INV 且有 X2
-        if "X2" in n:
-            return "INVX2"
+        if is_asap7:
+            # ASAP7 库匹配规则
+            # INVx1_: 精确匹配 INVx1_，避免匹配到 INVx11_ 或 INVx13_
+            if "INVX1_" in n and "X2" not in n:
+                return "INVX1"
+            # INVx2_: 精确匹配 INVx2_
+            if "INVX2_" in n:
+                return "INVX2"
+        else:
+            # Nangate45 库匹配规则
+            # INV_X1: 精确匹配，避免匹配到 INV_X16 或 TINVX1
+            if n == "INV_X1":
+                return "INVX1"
+            # INVX2: 精确匹配
+            if n == "INV_X2":
+                return "INVX2"
 
-    # NANDX1: 兼容 NAND2_X1, NAND_X1, NANDX1 等
-    if "NAND" in n and "X1" in n:
-        return "NANDX1"
+    # NAND 匹配规则
+    if "NAND" in n:
+        if is_asap7:
+            # ASAP7 库：必须匹配 NAND2x1_ 加下划线，避免匹配到 NAND2x1p5_
+            if "NAND2X1_" in n:
+                return "NANDX1"
+        else:
+            # Nangate45 库：匹配 NAND2_X1
+            if n == "NAND2_X1":
+                return "NANDX1"
 
-    # NORX1
-    if "NOR" in n and "X1" in n:
-        return "NORX1"
+    # NOR 匹配规则
+    if "NOR" in n and "XNOR" not in n:  # 避免匹配 XNOR
+        if is_asap7:
+            # ASAP7 库：必须匹配 NOR2x1_
+            if "NOR2X1_" in n:
+                return "NORX1"
+        else:
+            # Nangate45 库：匹配 NOR2_X1
+            if n == "NOR2_X1":
+                return "NORX1"
 
-    # XORX1
-    if "XOR" in n and "X1" in n:
-        return "XORX1"
+    # XOR 匹配规则 (已修改为 XORX2)
+    if "XOR" in n and "XNOR" not in n:  # 避免匹配 XNOR
+        if is_asap7:
+            # ASAP7 库：匹配 XOR2x2_ (因为没有 XOR2x1_)
+            if "XOR2X2_" in n:
+                return "XORX2"
+        else:
+            # Nangate45 库：匹配 XOR2_X2
+            if n == "XOR2_X2":
+                return "XORX2"
 
-    # 不在这 5 类里的，就返回 None（表示我们不关心）
+    # 不在这几类里的，就返回 None（表示我们不关心）
     return None
 
 
