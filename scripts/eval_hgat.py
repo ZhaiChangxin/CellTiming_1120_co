@@ -1,9 +1,8 @@
-# === Python代码文件: eval_hgat.py (最终修正版) ===
-
 import os
 import json
 import argparse
 import re
+import pickle
 
 import numpy as np
 import pandas as pd
@@ -76,10 +75,6 @@ def _infer_hgat_hid_from_state(sd: dict) -> int:
 def _reshape_main_net_to_ckpt(model, ckpt_model):
     """
     根据 ckpt 中 layer 的 weight shape 来调整 MLP 宽度。
-
-    注意：这段逻辑假设 DisentangledRegressor 内部有以下模块名：
-        enc[0], enc[2], split_node, head[0], head[2], mu, log_var
-    和你当前工程保持一致即可。
     """
     import torch.nn as nn
 
@@ -231,98 +226,74 @@ def prepare_target_embeddings(data_dir, tgt_spice_path, enc, device):
     return z_dict
 
 
-# ====== 主流程 ======
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--data_dir", required=True, help="数据目录 (含 meta.json, scaler_stats.json 等)")
-    ap.add_argument("--ckpt", required=True, help="训练保存的 ckpt.pt 路径")
-    ap.add_argument("--device", default="cpu")
+# ====== 预计算源域每个 cell_type 的设计向量 Z ======
+def prepare_source_embeddings(data_dir, enc, device):
+    """
+    根据 data_dir/meta.json 的 src_spi_by_cell，
+    为源域每种 cell_type 计算对应的 z 向量 (shape: [1, design_dim])。
+    """
+    meta_path = os.path.join(data_dir, "meta.json")
+    if not os.path.exists(meta_path):
+        raise FileNotFoundError(f"找不到 meta.json: {meta_path}，无法建立 cell_type -> SPICE 文件映射。")
 
-    ap.add_argument("--use_hgat", action="store_true", default=True, help="保留以兼容参数，不实际控制逻辑")
-    ap.add_argument("--hid", type=int, default=128, help="MLP 隐藏层维度（会被 ckpt reshape 覆盖）")
-    ap.add_argument("--tgt_spice", type=str, default="", help="ASAP7 SPICE 文件路径")
-    # 【修正】修复了上一版本中的拼写错误 ap.add_right" -> ap.add_argument("
-    ap.add_argument("--csv", type=str, default="", help="指定评测 CSV（不指定则尝试默认文件）")
+    with open(meta_path, "r") as f:
+        meta = json.load(f)
 
-    args = ap.parse_args()
-    device = torch.device(args.device)
+    src_map = meta.get("src_spi_by_cell", {})
+    if not src_map:
+        raise RuntimeError("meta.json 中没有 'src_spi_by_cell' 映射信息。")
 
-    # 1. 确定评测的 CSV 文件
-    if args.csv:
-        csv_path = args.csv
-    else:
-        # 默认：优先用有标签的目标域 CSV
-        cand = [
-            os.path.join(args.data_dir, "tgt_delay_labeled.csv"),
-            os.path.join(args.data_dir, "tgt.csv"),
-        ]
-        csv_path = next((p for p in cand if os.path.isfile(p)), None)
-        if not csv_path:
-            raise FileNotFoundError("未找到默认评测 CSV，请通过 --csv 指定。")
+    z_dict = {}
+    enc.eval()
 
-    print(f"[Info] Evaluating on: {csv_path}")
+    print("[Info] Pre-computing Z for source cells:")
+    with torch.no_grad():
+        for cell_type, rel_path in src_map.items():
+            # 解析 SPICE 文件路径（支持相对 data_dir）
+            if os.path.exists(rel_path):
+                sp_path = rel_path
+            else:
+                sp_path = os.path.join(data_dir, rel_path)
 
-    # 2. 读取 scaler（必须和训练时一致）
-    ss_path = os.path.join(args.data_dir, "scaler_stats.json")
-    ys_path = os.path.join(args.data_dir, "y_scaler.json")
-    if os.path.exists(ss_path) and os.path.exists(ys_path):
-        stats = json.load(open(ss_path, "r"))
-        yinfo = json.load(open(ys_path, "r"))
-        x_mean = np.array([stats["mean"].get(c, 0.0) for c in NUMERIC_COLS], dtype=np.float32)
-        x_std = np.array([stats["std"].get(c, 1.0) for c in NUMERIC_COLS], dtype=np.float32)
-        y_mean, y_std = float(yinfo["mean"]), float(yinfo["std"])
-    else:
-        raise FileNotFoundError("找不到 scaler_stats.json / y_scaler.json，无法反归一化。")
+            if not os.path.exists(sp_path):
+                print(f"  [Warn] Source SPICE file for {cell_type} not found: {sp_path}. Skipping.")
+                continue
 
-    # 3. 构建 Dataset / DataLoader
+            with open(sp_path, "r", encoding="utf-8", errors="ignore") as f_sp:
+                sp_text = f_sp.read()
+
+            devs = parse_transistors_spice(sp_text)
+            _, pins = parse_top_subckt_pins(sp_text)
+            if not devs:
+                print(f"  [Warn] No transistor devs found for source {cell_type}. Skipping.")
+                continue
+
+            g, feats, _ = build_dgl_graph_from_devs(devs, pins)
+            g = g.to(device)
+            feats = {k: v.to(device) for k, v in feats.items()}
+
+            z = enc(g, feats)
+            if z.dim() == 1:
+                z = z.unsqueeze(0)
+
+            z_dict[cell_type] = z
+            print(f"  -> {cell_type}: src_spice='{sp_path}', z.shape={tuple(z.shape)}")
+
+    return z_dict
+
+
+# ====== 通用评估函数（给定一个 csv 和对应的 z_map） ======
+def run_eval_single(csv_path, z_map, tag, model, x_mean_t, x_std_t, y_mean, y_std, device, design_dim):
+    print(f"[Info] Evaluating {tag} on: {csv_path}")
     ds = EvalDataset(csv_path)
     dl = DataLoader(ds, batch_size=256, shuffle=False, num_workers=0, collate_fn=eval_collate)
 
-    # 4. 加载 ckpt
-    state = torch.load(args.ckpt, map_location=device, weights_only=True) # 建议加上 weights_only=True
-    if isinstance(state, dict) and "model" in state:
-        ckpt_model = state["model"]
-        ckpt_enc = state.get("enc", None)
-        ckpt_inmap = state.get("hgat_in_dim_map", None)
-        design_dim = int(state.get("design_dim", 64))
-    else:
-        raise RuntimeError("ckpt 格式不符合预期：需要包含 'model' 和 'enc' 等键。")
-
-    # 5. 初始化 HGAT encoder，并加载权重
-    if ckpt_inmap is None:
-        # 兜底：如果 ckpt 没存 in_dim_map，只能硬编码（一般不会发生）
-        print("[Warn] ckpt 中没有 'hgat_in_dim_map'，使用默认 {'NET':4,'PMOS':2,'NMOS':2} 尝试加载。")
-        ckpt_inmap = {"NET": 4, "PMOS": 2, "NMOS": 2}
-
-    enc_hid = _infer_hgat_hid_from_state(ckpt_enc)
-    enc = HGATDesignEncoder(in_dim_map=ckpt_inmap, hid=enc_hid, out=design_dim).to(device)
-    enc.load_state_dict(ckpt_enc, strict=True)
-
-    # 6. 预计算目标域每种 cell_type 的设计向量 z
-    z_map = prepare_target_embeddings(args.data_dir, args.tgt_spice, enc, device)
-
-    # 7. 初始化 DisentangledRegressor，并加载权重
-    model = DisentangledRegressor(
-        in_dim=len(NUMERIC_COLS),
-        hid=args.hid,                # 先给一个默认，后面 reshape 会覆盖
-        design_dim_override=design_dim,
-    ).to(device)
-    model = _reshape_main_net_to_ckpt(model, ckpt_model)
-    model.load_state_dict(ckpt_model, strict=True)
-    model.eval()
-
-    # 8. 推理循环
     preds, gts = [], []
 
-    x_mean_t = torch.from_numpy(x_mean).to(device)
-    x_std_t = torch.from_numpy(x_std).to(device)
-
-    print("[Info] Starting Inference...")
     with torch.no_grad():
         for xb, yb, cts in dl:
             xb = xb.to(device)
-            # 标准化（和训练完全一致）
-            xb = (xb - x_mean_t) / x_std_t
+            xb = (xb - x_mean_t) / x_std_t  # 标准化
 
             # 为 batch 中每个样本构造对应的 z
             z_list = []
@@ -335,48 +306,253 @@ def main():
 
             zb = torch.cat(z_list, dim=0)  # [B, design_dim]
 
-            # 前向
             mu, logv, _, _ = model(xb, zb)
 
-            # 与训练时 losses.py 的逻辑保持一致！
-            # 必须对模型原始输出 mu 进行 tanh 软限制，然后再反归一化。
-            max_abs = 10.0 # 这个值必须和 losses.py 中的 max_abs 一致
+            max_abs = 10.0  # 必须和 losses.py 中的 max_abs 一致
             mu = max_abs * torch.tanh(mu / max_abs)
 
-            # 反归一化到原 delay 单位
             mu_np = mu.cpu().numpy()
-            mu_ps = mu_np * y_std + y_mean   # y_std, y_mean 来自训练时统计
+            mu_ps = mu_np * y_std + y_mean
             preds.append(mu_ps)
 
             if yb is not None:
                 gts.append(yb.numpy())
 
-    # 9. 计算指标 & 保存结果
     y_pred = np.concatenate(preds, axis=0)
 
     if len(gts) > 0:
         y_true = np.concatenate(gts, axis=0)
+
         mae = np.mean(np.abs(y_pred - y_true))
+        mse = np.mean((y_pred - y_true) ** 2)
         r2 = r2_score(y_true, y_pred)
 
         print("=" * 40)
-        print(f"Target Test Result ({len(y_pred)} samples):")
+        print(f"{tag} Test Result ({len(y_pred)} samples):")
         print(f"  MAE : {mae:.5f} (ps)")
+        print(f"  MSE : {mse:.5f} (ps^2)")
         print(f"  R2  : {r2:.4f}")
         print("=" * 40)
 
         out_df = pd.DataFrame({"pred": y_pred.flatten(), "label": y_true.flatten()})
-        out_path = os.path.join(args.data_dir, "eval_result.csv")
-        out_df.to_csv(out_path, index=False)
-        print(f"[Info] Results saved to {out_path}")
     else:
-        # 无标签场景：只输出预测
         out_df = pd.DataFrame({"pred": y_pred.flatten()})
-        out_path = os.path.join(args.data_dir, "eval_result.csv")
-        out_df.to_csv(out_path, index=False)
-        print(f"[Info] Unlabeled data, predictions saved to {out_path}")
+
+    out_name = f"eval_result_{tag.lower()}.csv"
+    out_path = os.path.join(os.path.dirname(csv_path), out_name)
+    out_df.to_csv(out_path, index=False)
+    print(f"[Info] {tag} results saved to {out_path}")
+
+
+# ====== 主流程 ======
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--data_dir", required=True, help="数据目录 (含 meta.json, scaler_stats.json 等)")
+    ap.add_argument("--ckpt", required=True, help="训练保存的 ckpt.pt 路径")
+    ap.add_argument("--device", default="cpu")
+
+    ap.add_argument("--use_hgat", action="store_true", default=True, help="保留以兼容参数，不实际控制逻辑")
+    ap.add_argument("--hid", type=int, default=128, help="MLP 隐藏层维度（会被 ckpt reshape 覆盖）")
+    ap.add_argument("--tgt_spice", type=str, default="", help="ASAP7 SPICE 文件路径")
+    ap.add_argument("--csv", type=str, default="", help="若指定，则只评估该 CSV（按目标域处理）")
+
+    args = ap.parse_args()
+    device = torch.device(args.device)
+
+    # 1. 读取 scaler（必须和训练时一致）
+    ss_path = os.path.join(args.data_dir, "scaler_stats.json")
+    ys_path = os.path.join(args.data_dir, "y_scaler.json")
+    if os.path.exists(ss_path) and os.path.exists(ys_path):
+        stats = json.load(open(ss_path, "r"))
+        yinfo = json.load(open(ys_path, "r"))
+        x_mean = np.array([stats["mean"].get(c, 0.0) for c in NUMERIC_COLS], dtype=np.float32)
+        x_std = np.array([stats["std"].get(c, 1.0) for c in NUMERIC_COLS], dtype=np.float32)
+        y_mean, y_std = float(yinfo["mean"]), float(yinfo["std"])
+    else:
+        raise FileNotFoundError("找不到 scaler_stats.json / y_scaler.json，无法反归一化。")
+
+    x_mean_t = torch.from_numpy(x_mean).to(device)
+    x_std_t = torch.from_numpy(x_std).to(device)
+
+    # 2. 加载 ckpt
+    # PyTorch 2.x 引入了 `weights_only=True` 的“安全反序列化”，
+    # 但很多旧 ckpt 里会保存 numpy 对象（例如 ndarray），会触发 UnpicklingError。
+    # 这里做一个「尽量安全」的兼容：
+    #   1) 先尝试 allowlist numpy 的 _reconstruct（只影响 weights_only=True 的白名单）
+    #   2) 再尝试 weights_only=True
+    #   3) 若仍失败，并且 ckpt 来自你自己/可信来源，则降级 weights_only=False（存在任意代码执行风险！）
+    try:
+        from numpy.core.multiarray import _reconstruct  # type: ignore
+        if hasattr(torch, "serialization") and hasattr(torch.serialization, "add_safe_globals"):
+            torch.serialization.add_safe_globals([_reconstruct])
+    except Exception:
+        # 不影响后续加载逻辑
+        pass
+
+    try:
+        state = torch.load(args.ckpt, map_location=device, weights_only=True)
+    except pickle.UnpicklingError as e:
+        print("[Warn] torch.load(weights_only=True) failed:")
+        print(f"       {e}")
+        print("[Warn] Falling back to torch.load(weights_only=False).")
+        print("       ⚠️  仅当 ckpt 来自你自己/可信来源时才这样做（否则可能有任意代码执行风险）。")
+        state = torch.load(args.ckpt, map_location=device, weights_only=False)
+    if isinstance(state, dict) and "model" in state:
+        ckpt_model = state["model"]
+        ckpt_enc = state.get("enc", None)
+        ckpt_inmap = state.get("hgat_in_dim_map", None)
+        design_dim = int(state.get("design_dim", 64))
+    else:
+        raise RuntimeError("ckpt 格式不符合预期：需要包含 'model' 和 'enc' 等键。")
+
+    # 3. 初始化 HGAT encoder，并加载权重
+    if ckpt_inmap is None:
+        print("[Warn] ckpt 中没有 'hgat_in_dim_map'，使用默认 {'NET':4,'PMOS':2,'NMOS':2} 尝试加载。")
+        ckpt_inmap = {"NET": 4, "PMOS": 2, "NMOS": 2}
+
+    enc_hid = _infer_hgat_hid_from_state(ckpt_enc)
+    enc = HGATDesignEncoder(in_dim_map=ckpt_inmap, hid=enc_hid, out=design_dim).to(device)
+    enc.load_state_dict(ckpt_enc, strict=True)
+
+    # 4. 初始化 DisentangledRegressor，并加载权重
+    model = DisentangledRegressor(
+        in_dim=len(NUMERIC_COLS),
+        hid=args.hid,
+        design_dim_override=design_dim,
+    )
+
+    model = _reshape_main_net_to_ckpt(model, ckpt_model)
+    model.load_state_dict(ckpt_model, strict=True)
+    model = model.to(device)
+    model.eval()
+
+    # 5. 判断评估哪些数据集
+    # 定义标准路径
+    src_csv_default = os.path.join(args.data_dir, "src_delay.csv")
+    tgt_train_default = os.path.join(args.data_dir, "tgt_train.csv")
+    tgt_val_default = os.path.join(args.data_dir, "tgt_val.csv")
+    tgt_test_default = os.path.join(args.data_dir, "tgt_test.csv")
+
+    eval_src = False
+    eval_tgt_train = False
+    eval_tgt_val = False
+    eval_tgt_test = False
+    eval_tgt_custom = False
+
+    custom_tgt_csv = None
+
+    if args.csv:
+        # 用户手动指定 CSV：只评估这一份（按目标域处理）
+        if not os.path.isfile(args.csv):
+            raise FileNotFoundError(f"--csv 指定的文件不存在: {args.csv}")
+        eval_tgt_custom = True
+        custom_tgt_csv = args.csv
+    else:
+        # 自动检测源域 / 目标域(Train/Val/Test)
+        if os.path.isfile(src_csv_default):
+            eval_src = True
+
+        # 依次检测目标域各集
+        if os.path.isfile(tgt_train_default):
+            eval_tgt_train = True
+        if os.path.isfile(tgt_val_default):
+            eval_tgt_val = True
+        if os.path.isfile(tgt_test_default):
+            eval_tgt_test = True
+
+    if not any([eval_src, eval_tgt_train, eval_tgt_val, eval_tgt_test, eval_tgt_custom]):
+        raise RuntimeError("未在 data_dir 找到任何标准数据集 (src_delay, tgt_train, tgt_val, tgt_test)，也未指定 --csv。")
+
+    # 6. 预计算源域 / 目标域的设计向量 z
+    #    目标域的 embed 只需算一次，可被 Train/Val/Test 共用
+    z_src = None
+    z_tgt = None
+
+    if eval_src:
+        z_src = prepare_source_embeddings(args.data_dir, enc, device)
+
+    # 只要涉及任意目标域数据，就需要准备 z_tgt
+    need_tgt_embed = (eval_tgt_train or eval_tgt_val or eval_tgt_test or eval_tgt_custom)
+    if need_tgt_embed:
+        z_tgt = prepare_target_embeddings(args.data_dir, args.tgt_spice, enc, device)
+
+    # 7. 分别跑评估
+
+    # (A) 源域
+    if eval_src:
+        run_eval_single(
+            csv_path=src_csv_default,
+            z_map=z_src,
+            tag="Source",
+            model=model,
+            x_mean_t=x_mean_t,
+            x_std_t=x_std_t,
+            y_mean=y_mean,
+            y_std=y_std,
+            device=device,
+            design_dim=design_dim,
+        )
+
+    # (B) 目标域 - 训练集
+    if eval_tgt_train:
+        run_eval_single(
+            csv_path=tgt_train_default,
+            z_map=z_tgt,
+            tag="Target_Train",
+            model=model,
+            x_mean_t=x_mean_t,
+            x_std_t=x_std_t,
+            y_mean=y_mean,
+            y_std=y_std,
+            device=device,
+            design_dim=design_dim,
+        )
+
+    # (C) 目标域 - 验证集
+    if eval_tgt_val:
+        run_eval_single(
+            csv_path=tgt_val_default,
+            z_map=z_tgt,
+            tag="Target_Val",
+            model=model,
+            x_mean_t=x_mean_t,
+            x_std_t=x_std_t,
+            y_mean=y_mean,
+            y_std=y_std,
+            device=device,
+            design_dim=design_dim,
+        )
+
+    # (D) 目标域 - 测试集
+    if eval_tgt_test:
+        run_eval_single(
+            csv_path=tgt_test_default,
+            z_map=z_tgt,
+            tag="Target_Test",
+            model=model,
+            x_mean_t=x_mean_t,
+            x_std_t=x_std_t,
+            y_mean=y_mean,
+            y_std=y_std,
+            device=device,
+            design_dim=design_dim,
+        )
+
+    # (E) 目标域 - 用户自定义
+    if eval_tgt_custom:
+        run_eval_single(
+            csv_path=custom_tgt_csv,
+            z_map=z_tgt,
+            tag="Target_Custom",
+            model=model,
+            x_mean_t=x_mean_t,
+            x_std_t=x_std_t,
+            y_mean=y_mean,
+            y_std=y_std,
+            device=device,
+            design_dim=design_dim,
+        )
 
 
 if __name__ == "__main__":
     main()
-

@@ -1,4 +1,4 @@
-# === Python代码文件: build_dataset.py (已修改) ===
+# === Python代码文件: build_dataset.py (7:2:1 版本) ===
 
 import argparse
 import os
@@ -17,7 +17,7 @@ from spi2graph import parse_transistors_spice, extract_wl_features
 # 配置：要保留的 cell 类型
 # ======================================================
 
-TARGET_CELL_TYPES = ["INVX1", "INVX2", "NANDX1", "NORX1", "XORX1"]
+TARGET_CELL_TYPES = ["INVX1", "INVX2", "NANDX1", "NORX1", "XORX2"]
 
 # -------- 源域（Nangate）每个 cell 对应一个 SPI 文件 --------
 SRC_CELL_SPI_FILES = {
@@ -25,7 +25,7 @@ SRC_CELL_SPI_FILES = {
     "INVX2": "INV_X2_lpe.spi",
     "NANDX1": "NAND2_X1_lpe.spi",
     "NORX1": "NOR2_X1_lpe.spi",
-    "XORX1": "XOR2_X1_lpe.spi",
+    "XORX2": "XOR2_X2_lpe.spi",
 }
 
 # -------- 目标域（ASAP7）大 SP 文件里的 subckt 名 --------
@@ -37,7 +37,7 @@ ASAP7_CELL_SUBCKT = {
     "NORX1": "NOR2x1_ASAP7_6t_L",
     # XORX1 在 SIMPLE lib 中对应 XOR2xp5_ASAP7_6t_L，
     # 如果 lib 里没有 XORX1 的 arc，这个映射不会被实际用到。
-    "XORX1": "XOR2xp5_ASAP7_6t_L",
+    "XORX2": "XOR2x2_ASAP7_6t_L",
 }
 
 ZERO_SPI_FEATS = {
@@ -58,11 +58,7 @@ def parse_spi_features_from_text(text: str) -> Dict[str, float]:
     devs = parse_transistors_spice(text)
     feats = extract_wl_features(devs)
 
-    # ------------------  【关键修改】 ------------------
     # 将 W/L 从米(m)转换为微米(um)，与 hgat.py 中的特征处理保持一致
-    # 原始值例如 1.8e-7 (m)，转换后为 0.18 (um)，是更合理的数值尺度
-    # 这可以防止后续计算的 req_p (1/wp_sum) 等特征值爆炸
-    # ----------------------------------------------------
     wp_sum = float(feats.get("wp_sum", 0.0)) * 1e6
     wn_sum = float(feats.get("wn_sum", 0.0)) * 1e6
     wp_over_wn = float(feats.get("wp_over_wn", 0.0) if wn_sum != 0 else 0.0)
@@ -163,7 +159,6 @@ def extract_subckt_text(sp_text: str, subckt_name: str) -> str:
     collecting = False
     buf = []
 
-    # 匹配 '.subckt <name>'
     patt_begin = re.compile(r"\s*\.subckt\s+%s\b" % re.escape(subckt_name), re.IGNORECASE)
     patt_end = re.compile(r"\s*\.ends\b", re.IGNORECASE)
 
@@ -205,7 +200,6 @@ def build_src_spi_feats(src_spi_root: str) -> Tuple[Dict[str, Dict[str, float]],
             feats_map[cell_type] = dict(ZERO_SPI_FEATS)
             continue
 
-        # 在目录下递归搜索这个文件名
         cands = list(root_path.rglob(rel_name))
         if not cands:
             print(f"[warn] SRC: SPI file {rel_name} for cell {cell_type} not found, using ZERO features.")
@@ -326,7 +320,7 @@ def _build_enhanced_row(
         "from_pin": from_pin,
         "to_pin": to_pin,
 
-        "pol": pol,           # rise / fall
+        "pol": pol,
         "slew": float(slew),
         "cap": float(cap),
         "voltage": float(voltage),
@@ -337,7 +331,7 @@ def _build_enhanced_row(
         "wp_sum": wp_sum,
         "wn_sum": wn_sum,
         "is_inv": 1 if "INV" in cell_type else 0,
-        "stack_pu": 1,  # 可以以后改成真实的堆叠数
+        "stack_pu": 1,
         "stack_pd": 1,
 
         "log_slew": log_slew,
@@ -398,6 +392,58 @@ def to_rows(tech: str, arc_dict: dict, spi_feats: Dict[str, float]):
     return rows
 
 
+
+# ======================================================
+# Split helpers (group-aware)
+# ======================================================
+
+def _make_group_id(df: pd.DataFrame, group_cols):
+    """Create a stable string group id from selected columns."""
+    missing = [c for c in group_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"[split] missing columns for grouping: {missing}")
+    return df[group_cols].astype(str).agg("||".join, axis=1)
+
+def _split_group_list(groups, ratios=(0.7, 0.2, 0.1), seed=42):
+    """Split unique group ids into train/val/test lists. Robust for small N."""
+    groups = np.asarray(list(groups))
+    rng = np.random.RandomState(seed)
+    rng.shuffle(groups)
+    n = len(groups)
+    if n == 0:
+        return [], [], []
+    if n == 1:
+        return groups.tolist(), [], []
+    if n == 2:
+        return groups[:1].tolist(), [], groups[1:].tolist()
+
+    r_train, r_val, r_test = ratios
+    n_train = int(np.floor(r_train * n))
+    n_val = int(np.floor(r_val * n))
+    n_test = n - n_train - n_val
+
+    # ensure non-empty train/test; val if possible
+    if n_train <= 0:
+        n_train = 1
+        n_test = n - n_train - n_val
+    if n_test <= 0:
+        n_test = 1
+        n_train = n - n_test - n_val
+    if n_val <= 0:
+        # try to give 1 group to val by stealing from train if possible
+        if n_train > 1:
+            n_val = 1
+            n_train = n - n_test - n_val
+        else:
+            n_val = 0
+            n_train = n - n_test
+
+    g_train = groups[:n_train]
+    g_val = groups[n_train:n_train + n_val]
+    g_test = groups[n_train + n_val:]
+    return g_train.tolist(), g_val.tolist(), g_test.tolist()
+
+
 # ======================================================
 # 主流程
 # ======================================================
@@ -414,7 +460,7 @@ def main():
                         help="ASAP7 SP 根目录或文件（包含 asap7sc6t_26_L_211010.sp）")
     parser.add_argument("--out_dir", required=True,
                         help="输出目录")
-    parser.add_argument("--target_label_ratio", type=float, default=0.1,
+    parser.add_argument("--target_label_ratio", type=float, default=0.9,
                         help="ASAP7 目标域中用于有标签监督的比例")
     args = parser.parse_args()
 
@@ -430,7 +476,7 @@ def main():
     if len(tgt_libs) == 0:
         raise SystemExit("[error] ASAP7 中没有找到任何 .lib，请确认目录。")
 
-    # ---------- 2) 源域：每个 cell 一个 SPI；目标域：从大 SP 按 cell 提取 ----------
+    # ---------- 2) 源域 SPI 特征 & 目标域 SP 特征 ----------
     src_spi_feats_map, src_spi_map = build_src_spi_feats(args.src_spi)
     tgt_spi_feats_map, tgt_subckt_map, tgt_sp_file = build_tgt_spi_feats_from_big_sp(args.tgt_sp)
 
@@ -462,7 +508,7 @@ def main():
             spi_feats = tgt_spi_feats_map.get(cell_type, ZERO_SPI_FEATS)
             all_tgt_rows += to_rows("ASAP7", arc, spi_feats)
 
-    # ---------- 4) 保存 CSV ----------
+    # ---------- 4) 保存 CSV & 7:2:1 划分 ----------
     if len(all_tgt_rows) == 0:
         raise SystemExit("[error] 构建失败：ASAP7 目标域没有任何有效的样本。")
 
@@ -472,26 +518,94 @@ def main():
     df_src = pd.DataFrame(all_src_rows) if len(all_src_rows) > 0 else pd.DataFrame()
     df_tgt = pd.DataFrame(all_tgt_rows)
 
-    # 打乱
+    # 打乱（保持可复现）
     if not df_src.empty:
         df_src = df_src.sample(frac=1, random_state=42).reset_index(drop=True)
     df_tgt = df_tgt.sample(frac=1, random_state=42).reset_index(drop=True)
 
-    # 目标域有标签 / 无标签划分
+    # 目标域有标签 / 无标签划分（保持你原来的语义：按“样本行比例”抽取 labeled）
     n_lab = max(1, int(len(df_tgt) * args.target_label_ratio))
     df_tgt_l = df_tgt.iloc[:n_lab].copy()
     df_tgt_u = df_tgt.iloc[n_lab:].copy()
 
+    # 标记是否有标签
     df_tgt_l["is_labeled"] = 1
     df_tgt_u["is_labeled"] = 0
-    if not df_src.empty:
-        df_src["is_labeled"] = 1
+    df_tgt["is_labeled"] = 0
+    df_tgt.loc[df_tgt_l.index, "is_labeled"] = 1
 
-    # 输出
+    # ------------------------------------------------------
+    # 修改：labeled 集的 train/val/test 采用“按样本行数”严格 7:2:1 切分
+    # 说明：
+    # - 你反馈希望最终 CSV 行数比例就是 7:2:1（而不是按 timing-arc 分组）。
+    # - 因此这里改为对 df_tgt_l 直接随机打乱后按行数切分。
+    # 注意：这样做可能会让同一条 timing arc 同时出现在 train/val/test，
+    #       如果你更在意泛化评估的严格性，建议再切回按 arc 分组。
+    # ------------------------------------------------------
+    def _split_rows(df: pd.DataFrame, ratios=(0.7, 0.2, 0.1), seed=42):
+        df = df.sample(frac=1, random_state=seed).reset_index(drop=True)
+        n = len(df)
+        if n == 0:
+            return df.copy(), df.copy(), df.copy()
+
+        r_train, r_val, r_test = ratios
+        n_train = int(np.floor(r_train * n))
+        n_val = int(np.floor(r_val * n))
+        n_test = n - n_train - n_val
+
+        # ensure non-empty splits when possible
+        if n >= 3:
+            if n_train <= 0:
+                n_train = 1
+            if n_val <= 0:
+                n_val = 1
+            if n_test <= 0:
+                n_test = 1
+            # re-balance to sum to n (steal from train first)
+            total = n_train + n_val + n_test
+            if total > n:
+                overflow = total - n
+                take = min(overflow, max(0, n_train - 1))
+                n_train -= take
+                overflow -= take
+                if overflow > 0:
+                    take = min(overflow, max(0, n_val - 1))
+                    n_val -= take
+                    overflow -= take
+                # if still overflow, adjust test
+                if overflow > 0:
+                    n_test = max(1, n_test - overflow)
+            elif total < n:
+                n_train += (n - total)
+
+        df_train = df.iloc[:n_train].copy()
+        df_val = df.iloc[n_train:n_train + n_val].copy()
+        df_test = df.iloc[n_train + n_val:].copy()
+        return df_train, df_val, df_test
+
+    df_tgt_train, df_tgt_val, df_tgt_test = _split_rows(df_tgt_l, ratios=(0.7, 0.2, 0.1), seed=42)
+# ===== 输出 =====
     if not df_src.empty:
         df_src.to_csv(os.path.join(args.out_dir, "src_delay.csv"), index=False)
+
+    # 兼容旧脚本：仍导出完整 labeled 集
     df_tgt_l.to_csv(os.path.join(args.out_dir, "tgt_delay_labeled.csv"), index=False)
-    df_tgt_u.to_csv(os.path.join(args.out_dir, "tgt_delay_unlabeled.csv"), index=False)
+
+    # 新增：train / val / test 三个文件（7:2:1）
+    df_tgt_train.to_csv(os.path.join(args.out_dir, "tgt_train.csv"), index=False)
+    df_tgt_val.to_csv(os.path.join(args.out_dir, "tgt_val.csv"), index=False)
+    df_tgt_test.to_csv(os.path.join(args.out_dir, "tgt_test.csv"), index=False)
+
+    # 无标签：导出一个真正“不含 delay”的版本，避免后续半监督误用标签
+    df_tgt_u_x = df_tgt_u.drop(columns=["delay"], errors="ignore")
+    # 兼容旧脚本：仍然提供一个同名文件，但不含 delay
+    df_tgt_u_x.to_csv(os.path.join(args.out_dir, "tgt_delay_unlabeled.csv"), index=False)
+    # 新名字（更明确）
+    df_tgt_u_x.to_csv(os.path.join(args.out_dir, "tgt_unlabeled_x.csv"), index=False)
+    # 同时保留一个 debug 文件（含 delay），仅用于核对/分析，不建议训练代码读取
+    df_tgt_u.to_csv(os.path.join(args.out_dir, "tgt_delay_unlabeled_debug.csv"), index=False)
+
+    # 全集（含 delay）
     df_tgt.to_csv(os.path.join(args.out_dir, "tgt_delay.csv"), index=False)
 
     # 特征列：去掉 label / 域标记 / 一些纯 ID 字段
@@ -512,6 +626,9 @@ def main():
         "num_src": int(len(df_src)) if not df_src.empty else 0,
         "num_tgt_l": int(len(df_tgt_l)),
         "num_tgt_u": int(len(df_tgt_u)),
+        "num_tgt_train": int(len(df_tgt_train)),
+        "num_tgt_val": int(len(df_tgt_val)),
+        "num_tgt_test": int(len(df_tgt_test)),
         "feature_cols": feature_cols,
         "cell_types": TARGET_CELL_TYPES,
     }
