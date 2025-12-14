@@ -14,9 +14,12 @@
     "NORX1": "NOR2x1_ASAP7_6t_L",
     "XORX1": "XOR2xp5_ASAP7_6t_L"
   },
-  "num_src": 3009,
-  "num_tgt_l": 234,
-  "num_tgt_u": 2111,
+  "num_src": 970,
+  "num_tgt_l": 77,
+  "num_tgt_u": 701,
+  "num_tgt_train": 53,
+  "num_tgt_val": 15,
+  "num_tgt_test": 9,
   "feature_cols": [
     "cell_type",
     "pol",

@@ -1,4 +1,4 @@
-# === Python代码文件: build_dataset.py (已修改) ===
+# === Python代码文件: build_dataset.py (7:2:1 版本) ===
 
 import argparse
 import os
@@ -58,11 +58,7 @@ def parse_spi_features_from_text(text: str) -> Dict[str, float]:
     devs = parse_transistors_spice(text)
     feats = extract_wl_features(devs)
 
-    # ------------------  【关键修改】 ------------------
     # 将 W/L 从米(m)转换为微米(um)，与 hgat.py 中的特征处理保持一致
-    # 原始值例如 1.8e-7 (m)，转换后为 0.18 (um)，是更合理的数值尺度
-    # 这可以防止后续计算的 req_p (1/wp_sum) 等特征值爆炸
-    # ----------------------------------------------------
     wp_sum = float(feats.get("wp_sum", 0.0)) * 1e6
     wn_sum = float(feats.get("wn_sum", 0.0)) * 1e6
     wp_over_wn = float(feats.get("wp_over_wn", 0.0) if wn_sum != 0 else 0.0)
@@ -163,7 +159,6 @@ def extract_subckt_text(sp_text: str, subckt_name: str) -> str:
     collecting = False
     buf = []
 
-    # 匹配 '.subckt <name>'
     patt_begin = re.compile(r"\s*\.subckt\s+%s\b" % re.escape(subckt_name), re.IGNORECASE)
     patt_end = re.compile(r"\s*\.ends\b", re.IGNORECASE)
 
@@ -205,7 +200,6 @@ def build_src_spi_feats(src_spi_root: str) -> Tuple[Dict[str, Dict[str, float]],
             feats_map[cell_type] = dict(ZERO_SPI_FEATS)
             continue
 
-        # 在目录下递归搜索这个文件名
         cands = list(root_path.rglob(rel_name))
         if not cands:
             print(f"[warn] SRC: SPI file {rel_name} for cell {cell_type} not found, using ZERO features.")
@@ -326,7 +320,7 @@ def _build_enhanced_row(
         "from_pin": from_pin,
         "to_pin": to_pin,
 
-        "pol": pol,           # rise / fall
+        "pol": pol,
         "slew": float(slew),
         "cap": float(cap),
         "voltage": float(voltage),
@@ -337,7 +331,7 @@ def _build_enhanced_row(
         "wp_sum": wp_sum,
         "wn_sum": wn_sum,
         "is_inv": 1 if "INV" in cell_type else 0,
-        "stack_pu": 1,  # 可以以后改成真实的堆叠数
+        "stack_pu": 1,
         "stack_pd": 1,
 
         "log_slew": log_slew,
@@ -430,7 +424,7 @@ def main():
     if len(tgt_libs) == 0:
         raise SystemExit("[error] ASAP7 中没有找到任何 .lib，请确认目录。")
 
-    # ---------- 2) 源域：每个 cell 一个 SPI；目标域：从大 SP 按 cell 提取 ----------
+    # ---------- 2) 源域 SPI 特征 & 目标域 SP 特征 ----------
     src_spi_feats_map, src_spi_map = build_src_spi_feats(args.src_spi)
     tgt_spi_feats_map, tgt_subckt_map, tgt_sp_file = build_tgt_spi_feats_from_big_sp(args.tgt_sp)
 
@@ -462,7 +456,7 @@ def main():
             spi_feats = tgt_spi_feats_map.get(cell_type, ZERO_SPI_FEATS)
             all_tgt_rows += to_rows("ASAP7", arc, spi_feats)
 
-    # ---------- 4) 保存 CSV ----------
+    # ---------- 4) 保存 CSV & 7:2:1 划分 ----------
     if len(all_tgt_rows) == 0:
         raise SystemExit("[error] 构建失败：ASAP7 目标域没有任何有效的样本。")
 
@@ -482,15 +476,35 @@ def main():
     df_tgt_l = df_tgt.iloc[:n_lab].copy()
     df_tgt_u = df_tgt.iloc[n_lab:].copy()
 
+    # 标记是否有标签
     df_tgt_l["is_labeled"] = 1
     df_tgt_u["is_labeled"] = 0
     if not df_src.empty:
         df_src["is_labeled"] = 1
 
-    # 输出
+    # ===== 在有标签目标域样本内部做 7:2:1 划分 =====
+    n_total_l = len(df_tgt_l)
+    n_train = int(n_total_l * 0.7)
+    n_val = int(n_total_l * 0.2)
+    n_test = n_total_l - n_train - n_val  # 确保总数不丢
+
+    df_tgt_train = df_tgt_l.iloc[:n_train].reset_index(drop=True)
+    df_tgt_val = df_tgt_l.iloc[n_train:n_train + n_val].reset_index(drop=True)
+    df_tgt_test = df_tgt_l.iloc[n_train + n_val:].reset_index(drop=True)
+
+    # ===== 输出 =====
     if not df_src.empty:
         df_src.to_csv(os.path.join(args.out_dir, "src_delay.csv"), index=False)
+
+    # 兼容旧脚本：仍导出完整 labeled 集
     df_tgt_l.to_csv(os.path.join(args.out_dir, "tgt_delay_labeled.csv"), index=False)
+
+    # 新增：train / val / test 三个文件（7:2:1）
+    df_tgt_train.to_csv(os.path.join(args.out_dir, "tgt_train.csv"), index=False)
+    df_tgt_val.to_csv(os.path.join(args.out_dir, "tgt_val.csv"), index=False)
+    df_tgt_test.to_csv(os.path.join(args.out_dir, "tgt_test.csv"), index=False)
+
+    # 无标签和全集保持不变
     df_tgt_u.to_csv(os.path.join(args.out_dir, "tgt_delay_unlabeled.csv"), index=False)
     df_tgt.to_csv(os.path.join(args.out_dir, "tgt_delay.csv"), index=False)
 
@@ -512,6 +526,9 @@ def main():
         "num_src": int(len(df_src)) if not df_src.empty else 0,
         "num_tgt_l": int(len(df_tgt_l)),
         "num_tgt_u": int(len(df_tgt_u)),
+        "num_tgt_train": int(len(df_tgt_train)),
+        "num_tgt_val": int(len(df_tgt_val)),
+        "num_tgt_test": int(len(df_tgt_test)),
         "feature_cols": feature_cols,
         "cell_types": TARGET_CELL_TYPES,
     }
