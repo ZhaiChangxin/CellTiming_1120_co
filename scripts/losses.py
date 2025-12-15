@@ -1,95 +1,69 @@
-# === Python代码文件: losses.py (已修复) ===
 import torch
-import torch.nn as nn
-import numpy as np
+import torch.nn.functional as F
 
 
-def gaussian_nll(y, mu, log_var, reduction='mean'):
+def gaussian_nll(y, mu, log_var, epsilon=1e-6):
     """
-    计算高斯负对数似然 (Gaussian Negative Log-Likelihood)。
-    用于回归任务，假设模型输出均值 mu 和对数方差 log_var。
+    计算高斯分布的负对数似然 (Negative Log Likelihood).
+    用于回归任务中的不确定性估计。
 
-    公式: NLL = 0.5 * (log(sigma^2) + (y - mu)^2 / sigma^2) + C
+    Loss = 0.5 * (log_var + (y - mu)^2 / exp(log_var)) + C
     """
-    # 限制 log_var 防止数值爆炸 (可选，视稳定性而定)
-    # log_var = torch.clamp(log_var, min=-10, max=10)
+    # 确保 log_var 不会造成数值不稳定
+    # 限制 log_var 范围，防止 exp(log_var) 变为 0 或无穷大
+    log_var = torch.clamp(log_var, min=-10, max=10)
+    var = torch.exp(log_var)
 
-    sigma_2 = torch.exp(log_var)
-
-    # loss term
-    loss = 0.5 * (log_var + (y - mu) ** 2 / sigma_2)
-
-    # 加上常数项 0.5 * log(2π) 让数值具有统计意义 (优化时可忽略，但为了严谨加上)
-    loss = loss + 0.5 * np.log(2 * np.pi)
-
-    if reduction == 'mean':
-        return loss.mean()
-    elif reduction == 'sum':
-        return loss.sum()
-    else:
-        return loss
+    # NLL 公式
+    nll = 0.5 * (log_var + (y - mu) ** 2 / (var + epsilon))
+    return nll.mean()  # 返回 batch 的平均值
 
 
-def kl_divergence(z_q, z_p):
+def latent_kl_loss(z_q, z_p):
     """
-    计算两个高斯分布之间的 KL 散度: KL(Q || P)
-
-    Args:
-        z_q: 变分后验分布 Q(z|x)，格式为 tuple (mu_q, logvar_q)
-        z_p: 先验分布 P(z)，格式为 tuple (mu_p, logvar_p)。
-             如果 z_p 为 None，则默认 P(z) 为标准正态分布 N(0, I)。
+    计算潜变量的 KL 散度 (用于 Phase 1 & 2 的解耦正则化).
+    假设 z_q, z_p 是 (mu, logvar) 的元组，或者如果是 Tensor 则计算 L2 距离。
     """
-    mu_q, logvar_q = z_q
-
-    if z_p is None:
-        # KL(N(mu, var) || N(0, 1))
-        # 公式: -0.5 * sum(1 + log(var) - mu^2 - var)
-        # dim=1 表示在 latent 维度求和
-        kld = -0.5 * torch.sum(1 + logvar_q - mu_q.pow(2) - logvar_q.exp(), dim=1)
-    else:
-        # KL(N(mu1, var1) || N(mu2, var2))
+    if isinstance(z_q, tuple) and isinstance(z_p, tuple):
+        # 两个高斯分布之间的 KL
+        mu_q, logvar_q = z_q
         mu_p, logvar_p = z_p
-
-        # 公式: 0.5 * sum(log(var2/var1) + (var1 + (mu1-mu2)^2)/var2 - 1)
-        kld = 0.5 * torch.sum(
-            logvar_p - logvar_q - 1 +
-            (logvar_q.exp() + (mu_q - mu_p).pow(2)) / logvar_p.exp(),
-            dim=1
-        )
-
-    return kld.mean()  # 对 batch 取平均
+        kl = 0.5 * (logvar_p - logvar_q - 1 +
+                    (torch.exp(logvar_q) + (mu_q - mu_p) ** 2) / torch.exp(logvar_p))
+        return kl.mean()
+    else:
+        # 如果不是分布参数，退化为简单的特征距离 (MSE)
+        # 对应原有代码中可能的 latent matching
+        return F.mse_loss(z_q, z_p)
 
 
-def total_loss(y_true, mu_pred, logvar_pred, z_q, z_p, kl_weight=0.01):
+def total_loss(y_true, y_mu, y_log_var, z_q=None, z_p=None, kl_weight=0.01):
     """
-    总损失函数计算。
+    综合损失函数
 
-    Args:
-        y_true: 真实标签 (Batch, 1)
-        mu_pred: 预测均值 (Batch, 1)
-        logvar_pred: 预测对数方差 (Batch, 1)
-        z_q: Encoder 输出的潜在分布参数 (mu, logvar)
-        z_p: 先验分布参数 (通常为 None 或设计向量分布)
-        kl_weight: KL 散度的权重系数 (beta-VAE 中的 beta)
+    参数:
+    y_true: 真实标签
+    y_mu: 预测均值
+    y_log_var: 预测方差的对数
+    z_q: 变分后验潜变量 (Phase 3 可为 None)
+    z_p: 先验潜变量 (Phase 3 可为 None)
+    kl_weight: 潜变量 KL 损失的权重
 
-    Returns:
-        loss: 总损失 (反向传播用)
-        recon_loss_item: 回归损失数值 (日志用)
-        kl_loss_item: KL 散度数值 (日志用)
+    返回:
+    (total_loss, nll_loss, kl_loss)
     """
 
-    # 1. 回归损失 (Reconstruction / Prediction Loss)
-    # 使用 NLL 而不是 MSE，是为了让模型学习预测的不确定性
-    recon_loss = gaussian_nll(y_true, mu_pred, logvar_pred)
+    # 1. 任务回归损失 (NLL) - 核心部分
+    # 这部分驱动模型去拟合 y，并学习数据本身的噪声 (Aleatoric Uncertainty)
+    nll = gaussian_nll(y_true, y_mu, y_log_var)
 
-    # 2. KL 散度 (Regularization)
-    # 检查 z_q 是否是 tuple (mu, logvar)，如果模型是确定性的 (Deterministic)，可能只传回 Tensor
-    kl_loss = torch.tensor(0.0, device=y_true.device)
-
-    if isinstance(z_q, (tuple, list)) and len(z_q) == 2:
-        kl_loss = kl_divergence(z_q, z_p)
+    # 2. 潜变量正则化 (Latent Regularization)
+    # 仅在 Phase 1 & 2 启用，用于特征解耦
+    kl = torch.tensor(0.0, device=y_true.device)
+    if z_q is not None and z_p is not None:
+        kl = latent_kl_loss(z_q, z_p)
 
     # 3. 总损失
-    loss = recon_loss + kl_weight * kl_loss
+    loss = nll + kl_weight * kl
 
-    return loss, recon_loss.item(), kl_loss.item()
+    return loss, nll, kl

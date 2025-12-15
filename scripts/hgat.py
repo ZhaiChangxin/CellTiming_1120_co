@@ -1,111 +1,194 @@
 import torch
 import torch.nn as nn
-from torch.nn import functional as F
-from spi2graph import parse_transistors_spice, parse_top_subckt_pins
-try:
-    import dgl
-    from dgl.nn import HeteroGraphConv, GATConv
-except Exception as e:
-    raise ImportError("DGL is required for HGAT. Please install dgl (CPU/GPU).")
+import torch.nn.functional as F
+import dgl
+import dgl.nn.pytorch as dglnn
+
+
+# ==========================================
+#   1. 图构建辅助函数 (核心修复在此)
+# ==========================================
+def build_dgl_graph_from_devs(devs, pins):
+    """
+    将解析后的 SPICE 器件列表转换为 DGL 异构图。
+    """
+
+    # 1. 建立节点映射 (Name -> ID)
+    net_map = {}
+    pmos_map = {}
+    nmos_map = {}
+
+    # [修复逻辑] 确保 pins 先被加入 net_map，保证它们一定存在
+    for p in pins:
+        if p not in net_map:
+            net_map[p] = len(net_map)
+
+    # 收集所有的 Net (从器件连接中)
+    for dev in devs:
+        for net_name in dev.get('nodes', []):
+            if net_name not in net_map:
+                net_map[net_name] = len(net_map)
+
+    # 收集器件
+    pmos_feats_list = []
+    nmos_feats_list = []
+
+    for dev in devs:
+        # 获取 W/L 等参数
+        # 兼容处理: 有些解析结果可能是 'w': '1.0e-7' 字符串
+        try:
+            w = float(dev.get('w', 1e-7))
+            l = float(dev.get('l', 1e-9))
+        except:
+            w, l = 1e-7, 1e-9
+
+        feat = [w, l]
+
+        # 区分 PMOS / NMOS
+        d_type = dev.get('subtype', 'n').lower()  # 'p' or 'n'
+
+        if 'p' in d_type:  # PMOS
+            pmos_map[dev['name']] = len(pmos_map)
+            pmos_feats_list.append(feat)
+        else:  # NMOS
+            nmos_map[dev['name']] = len(nmos_map)
+            nmos_feats_list.append(feat)
+
+    # 2. 构建边 (Edges)
+    data_dict = {
+        ('net', 'to_p', 'pmos'): ([], []),
+        ('pmos', 'to_n', 'net'): ([], []),
+        ('net', 'to_nm', 'nmos'): ([], []),
+        ('nmos', 'to_nm', 'net'): ([], [])
+    }
+
+    for dev in devs:
+        d_name = dev['name']
+        d_type = dev.get('subtype', 'n').lower()
+
+        # 确定器件 ID 和 对应的边类型键值
+        if 'p' in d_type:
+            if d_name not in pmos_map: continue
+            d_id = pmos_map[d_name]
+            u_key, v_key = ('net', 'to_p', 'pmos'), ('pmos', 'to_n', 'net')
+        else:
+            if d_name not in nmos_map: continue
+            d_id = nmos_map[d_name]
+            u_key, v_key = ('net', 'to_nm', 'nmos'), ('nmos', 'to_nm', 'net')
+
+        # 建立连接: Net <-> Device
+        for net_name in dev.get('nodes', []):
+            if net_name in net_map:
+                n_id = net_map[net_name]
+                # Bidirectional connection
+                data_dict[u_key][0].append(n_id)
+                data_dict[u_key][1].append(d_id)
+                data_dict[v_key][0].append(d_id)
+                data_dict[v_key][1].append(n_id)
+
+    # 3. 创建 DGL Graph [CRITICAL FIX]
+    # 显式告诉 DGL 每种节点有多少个，防止因孤立节点导致推断数量偏少而报错
+    num_nodes_dict = {
+        'net': len(net_map),
+        'pmos': len(pmos_map),
+        'nmos': len(nmos_map)
+    }
+
+    g = dgl.heterograph(data_dict, num_nodes_dict=num_nodes_dict)
+
+    # 4. 填充特征 Tensor
+    # Net 特征: [is_pin, 0, 0, 0] (示例，共4维)
+    net_feat_dim = 4
+    net_feats = torch.zeros((g.num_nodes('net'), net_feat_dim), dtype=torch.float32)
+
+    for pin in pins:
+        if pin in net_map:
+            net_feats[net_map[pin], 0] = 1.0
+
+    pmos_feats = torch.tensor(pmos_feats_list, dtype=torch.float32) if pmos_feats_list else torch.zeros((0, 2))
+    nmos_feats = torch.tensor(nmos_feats_list, dtype=torch.float32) if nmos_feats_list else torch.zeros((0, 2))
+
+    feats = {
+        'net': net_feats,
+        'pmos': pmos_feats,
+        'nmos': nmos_feats
+    }
+
+    return g, feats, (net_map, pmos_map, nmos_map)
+
+
+# ==========================================
+#   2. HGAT 模型定义
+# ==========================================
+
+class HGATLayer(nn.Module):
+    def __init__(self, in_dim, out_dim, n_heads=4):
+        super().__init__()
+        # 定义异构卷积
+        # 注意：如果某个图没有任何 PMOS，HeteroGraphConv 会自动处理空边的情况，但前提是输入特征维度正确
+        self.conv = dglnn.HeteroGraphConv({
+            'to_p': dglnn.GATConv(in_dim, out_dim // n_heads, num_heads=n_heads, allow_zero_in_degree=True),
+            'to_n': dglnn.GATConv(in_dim, out_dim // n_heads, num_heads=n_heads, allow_zero_in_degree=True),
+            'to_nm': dglnn.GATConv(in_dim, out_dim // n_heads, num_heads=n_heads, allow_zero_in_degree=True)
+        }, aggregate='sum')
+
+    def forward(self, g, h):
+        h_out = self.conv(g, h)
+        # Flatten heads
+        return {k: v.flatten(1) for k, v in h_out.items()}
+
 
 class HGATDesignEncoder(nn.Module):
-    def __init__(self, in_dim_map, hid=64, out=64, num_heads=1):
+    def __init__(self, in_dim_map, hid=64, out=64, n_layers=2, n_heads=4):
         super().__init__()
-        rels = ["gate_of", "sd_to", "back_sd"]
-        self.embed = nn.ModuleDict({nt: nn.Linear(in_dim_map[nt], hid) for nt in in_dim_map})
-        self.layer1 = HeteroGraphConv({r: GATConv(hid, hid, num_heads=num_heads) for r in rels}, aggregate='sum')
-        self.layer2 = HeteroGraphConv({r: GATConv(hid, hid, num_heads=num_heads) for r in rels}, aggregate='sum')
-        self.readout = nn.Sequential(nn.Linear(hid, out), nn.ReLU(), nn.Linear(out, out))
+        self.hid = hid
+
+        # Input Projections
+        self.input_projs = nn.ModuleDict()
+        for ntype, dim in in_dim_map.items():
+            self.input_projs[ntype] = nn.Sequential(
+                nn.Linear(dim, hid),
+                nn.ReLU()
+            )
+
+        self.layers = nn.ModuleList()
+        for _ in range(n_layers):
+            self.layers.append(HGATLayer(hid, hid, n_heads=n_heads))
+
+        self.out_proj = nn.Linear(hid, out)
 
     def forward(self, g, feats):
-        h = {nt: self.embed[nt](feats[nt]) for nt in feats}
-        h = self.layer1(g, h)
-        h = {k: v.mean(1) for k, v in h.items()}
-        h = {k: torch.relu(v) for k, v in h.items()}
-        h = self.layer2(g, h)
-        h = {k: v.mean(1) for k, v in h.items()}
-        mos = []
-        for nt in ["PMOS", "NMOS"]:
-            if nt in h and h[nt].shape[0] > 0:
-                mos.append(h[nt].mean(dim=0, keepdim=True))
-        if len(mos) == 0:
-            mos = [v.mean(dim=0, keepdim=True) for v in h.values()]
-        z = torch.mean(torch.cat(mos, dim=0), dim=0)
-        z = self.readout(z)
-        # ★ 新增：L2 归一化，使设计嵌入的尺度受控
-        z = F.normalize(z, dim=0)
-        return z
-# hgat.py - 追加以下辅助函数（直接复用 train_hgat.py 的逻辑）
-def build_dgl_graph_from_devs(devs, top_pins):
-    import dgl, torch, numpy as np
-    nets = {}
-    def net_id(n):
-        if n not in nets: nets[n] = len(nets)
-        return nets[n]
+        # 1. Feature Alignment
+        h = {}
+        for ntype, feat in feats.items():
+            # 大小写兼容处理 (外部传入 NET, 内部用 net)
+            key_upper = ntype.upper()
+            if key_upper in self.input_projs:
+                h[ntype] = self.input_projs[key_upper](feat)
+            else:
+                # 如果没有匹配的投影层（比如 data 里有 node_type 但 map 没定义），这理论上不该发生
+                pass
 
-    p_count=n_count=0
-    gate_src_p= []; gate_dst_p= []
-    gate_src_n= []; gate_dst_n= []
-    sd_src_p=   []; sd_dst_p=   []
-    sd_src_n=   []; sd_dst_n=   []
+        # 2. GNN Layers
+        for layer in self.layers:
+            h = layer(g, h)
+            h = {k: F.elu(v) for k, v in h.items()}
 
-    for d in devs:
-        if d["type"].startswith("p"):
-            mid = p_count; p_count += 1
-            gate_src_p.append(net_id(d["g"])); gate_dst_p.append(mid)
-            sd_src_p.extend([mid, mid]); sd_dst_p.extend([net_id(d["s"]), net_id(d["d"])])
-        else:
-            mid = n_count; n_count += 1
-            gate_src_n.append(net_id(d["g"])); gate_dst_n.append(mid)
-            sd_src_n.extend([mid, mid]); sd_dst_n.extend([net_id(d["s"]), net_id(d["d"])])
+        # 3. Readout (Pooling)
+        with g.local_scope():
+            g.ndata['h'] = h
+            readouts = []
+            for ntype in g.ntypes:
+                if g.num_nodes(ntype) > 0:
+                    # 使用 get 避免 key error
+                    if ntype in h:
+                        readouts.append(dgl.mean_nodes(g, 'h', ntype=ntype))
 
-    data_dict = {}
-    if p_count > 0:
-        data_dict[('NET','gate_of','PMOS')] = (torch.tensor(gate_src_p), torch.tensor(gate_dst_p))
-        data_dict[('PMOS','sd_to','NET')]   = (torch.tensor(sd_src_p),  torch.tensor(sd_dst_p))
-        data_dict[('NET','back_sd','PMOS')] = (torch.tensor(sd_dst_p),  torch.tensor(sd_src_p))
-    if n_count > 0:
-        data_dict[('NET','gate_of','NMOS')] = (torch.tensor(gate_src_n), torch.tensor(gate_dst_n))
-        data_dict[('NMOS','sd_to','NET')]   = (torch.tensor(sd_src_n),  torch.tensor(sd_dst_n))
-        data_dict[('NET','back_sd','NMOS')] = (torch.tensor(sd_dst_n),  torch.tensor(sd_src_n))
+            if len(readouts) > 0:
+                hg = torch.stack(readouts).mean(dim=0)
+            else:
+                # 极端情况：空图
+                hg = torch.zeros(1, self.hid).to(next(self.parameters()).device)
 
-    g = dgl.heterograph(data_dict, num_nodes_dict={'NET': len(nets), 'PMOS': p_count, 'NMOS': n_count})
-
-    f_net = []
-    for name, nid in sorted(nets.items(), key=lambda x:x[1]):
-        is_vdd = 1.0 if name.upper()=="VDD" else 0.0
-        is_vss = 1.0 if name.upper()=="VSS" else 0.0
-        is_a   = 1.0 if name.upper()=="A" else 0.0
-        is_y   = 1.0 if name.upper() in ("Y","ZN") else 0.0
-        f_net.append([is_vdd,is_vss,is_a,is_y])
-    f_net = torch.tensor(np.array(f_net, dtype=np.float32))
-
-    def mos_feats(list_dev):
-        arr = []
-        for d in list_dev:
-            # 修改：将单位从 米(m) 转换为 微米(um)，放大 1e6 倍
-            # 原始: 1.8e-7 -> 神经网络认为是 0
-            # 修改: 0.18   -> 神经网络认为是有意义的特征
-            raw_W = d["W"] if d["W"] is not None else 0.0
-            raw_L = d["L"] if d["L"] is not None else 0.0
-
-            W = raw_W * 1e6
-            L = raw_L * 1e6
-
-            arr.append([W, L])
-        if len(arr)==0:
-            return torch.zeros((0,2), dtype=torch.float32)
-        return torch.tensor(np.array(arr, dtype=np.float32))
-
-    f_p = mos_feats([d for d in devs if d["type"].startswith("p")])
-    f_n = mos_feats([d for d in devs if d["type"].startswith("n")])
-
-    feats = {'NET': f_net, 'PMOS': f_p, 'NMOS': f_n}
-    in_dim_map = {'NET': f_net.shape[1] if f_net.numel() else 4, 'PMOS': 2, 'NMOS': 2}
-    return g, feats, in_dim_map
-
-def build_graph_from_spice(spi_path):
-    text = open(spi_path,"r",encoding="utf-8",errors="ignore").read()
-    devs = parse_transistors_spice(text)
-    _, pins = parse_top_subckt_pins(text)
-    return build_dgl_graph_from_devs(devs, pins)
+            out = self.out_proj(hg)
+            return out
