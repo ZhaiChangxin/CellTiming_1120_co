@@ -392,6 +392,58 @@ def to_rows(tech: str, arc_dict: dict, spi_feats: Dict[str, float]):
     return rows
 
 
+
+# ======================================================
+# Split helpers (group-aware)
+# ======================================================
+
+def _make_group_id(df: pd.DataFrame, group_cols):
+    """Create a stable string group id from selected columns."""
+    missing = [c for c in group_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"[split] missing columns for grouping: {missing}")
+    return df[group_cols].astype(str).agg("||".join, axis=1)
+
+def _split_group_list(groups, ratios=(0.7, 0.2, 0.1), seed=42):
+    """Split unique group ids into train/val/test lists. Robust for small N."""
+    groups = np.asarray(list(groups))
+    rng = np.random.RandomState(seed)
+    rng.shuffle(groups)
+    n = len(groups)
+    if n == 0:
+        return [], [], []
+    if n == 1:
+        return groups.tolist(), [], []
+    if n == 2:
+        return groups[:1].tolist(), [], groups[1:].tolist()
+
+    r_train, r_val, r_test = ratios
+    n_train = int(np.floor(r_train * n))
+    n_val = int(np.floor(r_val * n))
+    n_test = n - n_train - n_val
+
+    # ensure non-empty train/test; val if possible
+    if n_train <= 0:
+        n_train = 1
+        n_test = n - n_train - n_val
+    if n_test <= 0:
+        n_test = 1
+        n_train = n - n_test - n_val
+    if n_val <= 0:
+        # try to give 1 group to val by stealing from train if possible
+        if n_train > 1:
+            n_val = 1
+            n_train = n - n_test - n_val
+        else:
+            n_val = 0
+            n_train = n - n_test
+
+    g_train = groups[:n_train]
+    g_val = groups[n_train:n_train + n_val]
+    g_test = groups[n_train + n_val:]
+    return g_train.tolist(), g_val.tolist(), g_test.tolist()
+
+
 # ======================================================
 # 主流程
 # ======================================================
@@ -408,7 +460,7 @@ def main():
                         help="ASAP7 SP 根目录或文件（包含 asap7sc6t_26_L_211010.sp）")
     parser.add_argument("--out_dir", required=True,
                         help="输出目录")
-    parser.add_argument("--target_label_ratio", type=float, default=0.1,
+    parser.add_argument("--target_label_ratio", type=float, default=0.9,
                         help="ASAP7 目标域中用于有标签监督的比例")
     args = parser.parse_args()
 
@@ -466,12 +518,12 @@ def main():
     df_src = pd.DataFrame(all_src_rows) if len(all_src_rows) > 0 else pd.DataFrame()
     df_tgt = pd.DataFrame(all_tgt_rows)
 
-    # 打乱
+    # 打乱（保持可复现）
     if not df_src.empty:
         df_src = df_src.sample(frac=1, random_state=42).reset_index(drop=True)
     df_tgt = df_tgt.sample(frac=1, random_state=42).reset_index(drop=True)
 
-    # 目标域有标签 / 无标签划分
+    # 目标域有标签 / 无标签划分（保持你原来的语义：按“样本行比例”抽取 labeled）
     n_lab = max(1, int(len(df_tgt) * args.target_label_ratio))
     df_tgt_l = df_tgt.iloc[:n_lab].copy()
     df_tgt_u = df_tgt.iloc[n_lab:].copy()
@@ -479,20 +531,28 @@ def main():
     # 标记是否有标签
     df_tgt_l["is_labeled"] = 1
     df_tgt_u["is_labeled"] = 0
-    if not df_src.empty:
-        df_src["is_labeled"] = 1
+    df_tgt["is_labeled"] = 0
+    df_tgt.loc[df_tgt_l.index, "is_labeled"] = 1
 
-    # ===== 在有标签目标域样本内部做 7:2:1 划分 =====
-    n_total_l = len(df_tgt_l)
-    n_train = int(n_total_l * 0.7)
-    n_val = int(n_total_l * 0.2)
-    n_test = n_total_l - n_train - n_val  # 确保总数不丢
+    # ------------------------------------------------------
+    # 关键修改：labeled 集的 train/val/test 采用“按 timing-arc 分组切分”
+    # group = (cell_type, cell_name, from_pin, to_pin)
+    # 目的：避免 Target_Test 与 Target_Train 共享同一条 arc（否则 R² 会虚高）。
+    # ------------------------------------------------------
+    group_cols = ["cell_type", "cell_name", "from_pin", "to_pin"]
+    df_tgt_l["_arc_id"] = _make_group_id(df_tgt_l, group_cols)
 
-    df_tgt_train = df_tgt_l.iloc[:n_train].reset_index(drop=True)
-    df_tgt_val = df_tgt_l.iloc[n_train:n_train + n_val].reset_index(drop=True)
-    df_tgt_test = df_tgt_l.iloc[n_train + n_val:].reset_index(drop=True)
+    uniq_arcs_l = df_tgt_l["_arc_id"].unique()
+    arcs_train, arcs_val, arcs_test = _split_group_list(uniq_arcs_l, ratios=(0.7, 0.2, 0.1), seed=42)
 
-    # ===== 输出 =====
+    df_tgt_train = df_tgt_l[df_tgt_l["_arc_id"].isin(set(arcs_train))].copy()
+    df_tgt_val = df_tgt_l[df_tgt_l["_arc_id"].isin(set(arcs_val))].copy()
+    df_tgt_test = df_tgt_l[df_tgt_l["_arc_id"].isin(set(arcs_test))].copy()
+
+    # 清理内部列：避免被误当成输入特征造成“记忆 arc id”
+    for _df in (df_tgt_l, df_tgt_train, df_tgt_val, df_tgt_test):
+        _df.drop(columns=["_arc_id"], inplace=True, errors="ignore")
+# ===== 输出 =====
     if not df_src.empty:
         df_src.to_csv(os.path.join(args.out_dir, "src_delay.csv"), index=False)
 
@@ -504,8 +564,16 @@ def main():
     df_tgt_val.to_csv(os.path.join(args.out_dir, "tgt_val.csv"), index=False)
     df_tgt_test.to_csv(os.path.join(args.out_dir, "tgt_test.csv"), index=False)
 
-    # 无标签和全集保持不变
-    df_tgt_u.to_csv(os.path.join(args.out_dir, "tgt_delay_unlabeled.csv"), index=False)
+    # 无标签：导出一个真正“不含 delay”的版本，避免后续半监督误用标签
+    df_tgt_u_x = df_tgt_u.drop(columns=["delay"], errors="ignore")
+    # 兼容旧脚本：仍然提供一个同名文件，但不含 delay
+    df_tgt_u_x.to_csv(os.path.join(args.out_dir, "tgt_delay_unlabeled.csv"), index=False)
+    # 新名字（更明确）
+    df_tgt_u_x.to_csv(os.path.join(args.out_dir, "tgt_unlabeled_x.csv"), index=False)
+    # 同时保留一个 debug 文件（含 delay），仅用于核对/分析，不建议训练代码读取
+    df_tgt_u.to_csv(os.path.join(args.out_dir, "tgt_delay_unlabeled_debug.csv"), index=False)
+
+    # 全集（含 delay）
     df_tgt.to_csv(os.path.join(args.out_dir, "tgt_delay.csv"), index=False)
 
     # 特征列：去掉 label / 域标记 / 一些纯 ID 字段

@@ -230,8 +230,8 @@ def canonical_cell_type(cell_name: str):
     # ====================================================
     # 4) XOR2 → XORX1（排除 XNOR）
     # ====================================================
-    if n.startswith("XOR2") and "X1" in n and "XNOR" not in n:
-        return "XORX1"
+    if n.startswith("XOR2") and "X2" in n and "XNOR" not in n:
+        return "XORX2"
 
     return None
 
