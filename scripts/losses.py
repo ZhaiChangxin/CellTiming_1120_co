@@ -12,7 +12,7 @@ def gaussian_nll(y, mu, log_var, reduction='mean'):
     公式: NLL = 0.5 * (log(sigma^2) + (y - mu)^2 / sigma^2) + C
     """
     # 限制 log_var 防止数值爆炸 (可选，视稳定性而定)
-    # log_var = torch.clamp(log_var, min=-10, max=10)
+    log_var = torch.clamp(log_var, min=-10, max=10)
 
     sigma_2 = torch.exp(log_var)
 
