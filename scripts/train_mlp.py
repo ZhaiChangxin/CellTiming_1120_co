@@ -1,325 +1,224 @@
-# train_mlp.py  —— 方案A：SRC预训练 + TGT微调（带 cell_type one-hot）
-import argparse
+# === Python代码文件: train_mlp.py ===
 import os
 import json
-
+import argparse
 import numpy as np
 import pandas as pd
 import torch
-from torch import nn
-from torch.utils.data import Dataset, DataLoader
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, Dataset
+from itertools import cycle
 
-from mlp_model import MLPRegressor
+from model import DisentangledRegressor, convert_to_bayesian
 
-
-# ===================== 基础数值特征（不含 cell_type one-hot） =====================
-BASE_NUMERIC_COLS = [
-    "slew", "cap", "voltage", "temp",
-    "wp_over_wn", "wp_sum", "wn_sum",
-    "is_inv", "stack_pu", "stack_pd",
-    "log_slew", "log_cap",
-    "req_p", "req_n",
-    "rc_p", "rc_n",
-    "rc_eff", "req_eff",
-    "inv_v", "inv_temp",
-    "pn_balance",
-    "pol_bit",   # 由 pol 构造（rise=1, fall=0）
+NUMERIC_COLS = [
+    "slew", "cap", "voltage", "temp", "wp_over_wn", "wp_sum", "wn_sum", "is_inv",
+    "stack_pu", "stack_pd", "log_slew", "log_cap", "req_p", "req_n", "rc_p", "rc_n",
+    "rc_eff", "req_eff", "inv_v", "inv_temp", "pn_balance", "pol_bit",
 ]
-
 TARGET_COL = "delay"
 
 
-# =========================================================
-# 特征处理
-# =========================================================
+# 【关键修正】: 鲁棒的 NLL 计算函数
+def robust_nll(y, mu, log_var):
+    # 1. 截断 log_var，防止 sigma^2 过小导致除以零，或过大导致溢出
+    # range: [-5, 5] -> sigma: [0.006, 148]
+    log_var = torch.clamp(log_var, min=-5.0, max=5.0)
 
-def ensure_feature_cols(df: pd.DataFrame, numeric_cols):
-    """
-    - 由 pol 构造 pol_bit
-    - 由 cell_type 构造 one-hot 列（列名形如 cell_type_INVX1）
-    - 不存在的列补 0，NaN 也补 0
-    """
-    df = df.copy()
-
-    # ---------- pol_bit ----------
-    if "pol_bit" not in df.columns:
-        if "pol" in df.columns:
-            df["pol_bit"] = (df["pol"].astype(str) == "rise").astype(np.float32)
-        else:
-            df["pol_bit"] = 0.0
-
-    # ---------- cell_type one-hot ----------
-    if "cell_type" in df.columns:
-        ct_series = df["cell_type"].astype(str)
-        for col in numeric_cols:
-            if col.startswith("cell_type_"):
-                ct_name = col[len("cell_type_") :]
-                df[col] = (ct_series == ct_name).astype(np.float32)
-
-    # ---------- 缺的列补 0 ----------
-    for c in numeric_cols:
-        if c not in df.columns:
-            df[c] = 0.0
-
-    df[numeric_cols] = df[numeric_cols].fillna(0.0).astype(np.float32)
-    df[TARGET_COL] = df[TARGET_COL].astype(np.float32)
-    return df
+    sigma2 = torch.exp(log_var)
+    loss = 0.5 * (log_var + (y - mu) ** 2 / sigma2)
+    return loss.mean()
 
 
-class TimingDataset(Dataset):
-    """
-    简单的 csv 数据集：
-      - x: numeric_cols
-      - y: delay
-      - 内部做标准化 (x_mean/std, y_mean/std)
-    """
-    def __init__(self, df: pd.DataFrame,
-                 numeric_cols,
-                 x_mean: np.ndarray, x_std: np.ndarray,
-                 y_mean: float, y_std: float):
-        super().__init__()
-        self.df = df.reset_index(drop=True)
-        self.numeric_cols = numeric_cols
+class TabularDataset(Dataset):
+    def __init__(self, csv_path, x_mean, x_std, y_mean, y_std):
+        if not os.path.exists(csv_path): raise FileNotFoundError(f"Missing {csv_path}")
+        df = pd.read_csv(csv_path)
 
-        self.x = self.df[self.numeric_cols].values.astype(np.float32)
-        self.y = self.df[TARGET_COL].values.astype(np.float32)
+        if "pol_bit" not in df.columns:
+            df["pol_bit"] = (df["pol"].astype(str) == "rise").astype(np.float32) if "pol" in df.columns else 0.0
+        for c in NUMERIC_COLS:
+            if c not in df.columns: df[c] = 0.0
 
-        self.x_mean = x_mean.astype(np.float32)
-        self.x_std = x_std.astype(np.float32)
-        self.y_mean = np.float32(y_mean)
-        self.y_std = np.float32(y_std)
+        x_raw = df[NUMERIC_COLS].fillna(0.0).astype(np.float32).values
+        # 加上 1e-6 防止标准差为0
+        self.x = (x_raw - x_mean) / (x_std + 1e-6)
+
+        y_raw = df[TARGET_COL].astype(np.float32).values
+        self.y = (y_raw - y_mean) / (y_std + 1e-6)
 
     def __len__(self):
-        return len(self.df)
+        return len(self.x)
 
-    def __getitem__(self, idx):
-        x = self.x[idx]
-        y = self.y[idx]
-
-        x_norm = (x - self.x_mean) / self.x_std
-        y_norm = (y - self.y_mean) / self.y_std
-
-        return torch.from_numpy(x_norm), torch.tensor(y_norm, dtype=torch.float32)
+    def __getitem__(self, i):
+        return torch.from_numpy(self.x[i]), torch.tensor(self.y[i])
 
 
-# =========================================================
-# 训练 / 评估函数
-# =========================================================
+def load_scalers(data_dir):
+    ss_path = os.path.join(data_dir, "scaler_stats.json")
+    ys_path = os.path.join(data_dir, "y_scaler.json")
+    if not os.path.exists(ss_path): return 0.0, 1.0, 0.0, 1.0
+    stats = json.load(open(ss_path, "r"))
+    yinfo = json.load(open(ys_path, "r"))
+    x_mean = np.array([stats["mean"].get(c, 0.0) for c in NUMERIC_COLS], dtype=np.float32)
+    x_std = np.array([stats["std"].get(c, 1.0) for c in NUMERIC_COLS], dtype=np.float32)
+    y_mean, y_std = float(yinfo["mean"]), float(yinfo["std"])
+    return x_mean, x_std, y_mean, y_std
 
-def train_one_epoch(model, loader, optimizer, device):
+
+# ==========================================
+#      STAGE 1: Source Pretraining
+# ==========================================
+def run_stage1(args, model, device, train_loader, save_path):
+    print(f"\n[Stage 1] Pretraining on Source... (Epochs: {args.s1_epochs})")
+    optimizer = optim.Adam(model.parameters(), lr=args.lr)
     model.train()
-    mse = nn.MSELoss()
-    total_loss = 0.0
-    n = 0
-    for xb, yb in loader:
-        xb = xb.to(device)
-        yb = yb.to(device)
 
-        optimizer.zero_grad()
-        pred = model(xb)
-        loss = mse(pred, yb)
-        loss.backward()
-        optimizer.step()
+    for epoch in range(args.s1_epochs):
+        epoch_loss = 0
+        count = 0
+        for xb, yb in train_loader:
+            xb, yb = xb.to(device), yb.to(device)
+            optimizer.zero_grad()
 
-        total_loss += loss.item() * xb.size(0)
-        n += xb.size(0)
-    return total_loss / max(n, 1)
+            mu, logv, _, _ = model(xb)
 
+            # Stage 1: 使用 MSE 辅助训练，比 NLL 更稳定，先让均值收敛
+            # 或者使用 robust_nll
+            loss = robust_nll(yb, mu, logv)
 
-@torch.no_grad()
-def eval_dataset(model, df: pd.DataFrame,
-                 numeric_cols,
-                 x_mean, x_std, y_mean, y_std, device, name=""):
-    """
-    对一个 DataFrame 做评估，返回 MAE / RMSE（单位 ps）
-    """
-    model.eval()
-    xs = df[numeric_cols].values.astype(np.float32)
-    ys = df[TARGET_COL].values.astype(np.float32)
+            loss.backward()
+            # 【关键修正】: 梯度裁剪
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
-    xs = (xs - x_mean) / x_std
-    xs_t = torch.from_numpy(xs).to(device)
-    ys_t = torch.from_numpy(ys).to(device)
+            optimizer.step()
+            epoch_loss += loss.item() * len(yb)
+            count += len(yb)
 
-    preds_norm = model(xs_t)
-    preds = preds_norm * y_std + y_mean  # 反标准化
+        if (epoch + 1) % 10 == 0:
+            print(f"  Ep {epoch + 1}/{args.s1_epochs} | Loss: {epoch_loss / count:.4f}")
 
-    diff = preds - ys_t
-    mae = diff.abs().mean().item()
-    rmse = torch.sqrt((diff ** 2).mean()).item()
-
-    print(f"[Eval {name}] MAE={mae:.4f} ps  RMSE={rmse:.4f} ps  (N={len(df)})")
-    return mae, rmse
+    torch.save({"model": model.state_dict()}, save_path)
+    print("  -> Stage 1 Checkpoint saved.")
 
 
-# =========================================================
-# 主流程（支持 joint / pretrain_src / finetune_tgt）
-# =========================================================
+# ==========================================
+#      STAGE 3: Target Fine-tuning
+# ==========================================
+def run_stage3(args, model, device, tgt_loader, src_loader, save_path):
+    print(f"\n[Stage 3] Target Fine-tuning... (Epochs: {args.s3_epochs})")
+
+    # 1. 转换模型
+    model = convert_to_bayesian(model, prior_sigma=0.1).to(device)
+
+    # 2. 设置优化器，降低学习率
+    params = [
+        {"params": model.enc.parameters(), "lr": args.lr * 0.01},
+        {"params": model.mu.parameters(), "lr": args.lr * 0.05},
+        {"params": model.log_var.parameters(), "lr": args.lr * 0.05}
+    ]
+    optimizer = optim.Adam(params)
+    model.train()
+
+    src_iter = cycle(src_loader)
+
+    for epoch in range(args.s3_epochs):
+        epoch_nll = 0
+        epoch_kl = 0
+        count = 0
+        # KL 退火：从 0 开始缓慢增加
+        beta = min(1.0, epoch / max(1, args.s3_epochs // 2)) * 0.01
+
+        for xb_tgt, yb_tgt in tgt_loader:
+            try:
+                xb_src, yb_src = next(src_iter)
+            except StopIteration:
+                src_iter = cycle(src_loader)
+                xb_src, yb_src = next(src_iter)
+
+            xb_tgt, yb_tgt = xb_tgt.to(device), yb_tgt.to(device)
+            xb_src, yb_src = xb_src.to(device), yb_src.to(device)
+
+            optimizer.zero_grad()
+
+            # Target Forward
+            mu_t, logv_t, _, _ = model(xb_tgt)
+            nll_tgt = robust_nll(yb_tgt, mu_t, logv_t)
+
+            # Source Replay (Auxiliary)
+            mu_s, logv_s, _, _ = model(xb_src)
+            nll_src = robust_nll(yb_src, mu_s, logv_s)
+
+            kl_loss = model.get_bayesian_kl() / (len(tgt_loader.dataset) + len(src_loader.dataset))
+
+            # Total Loss
+            loss = nll_tgt + 0.1 * nll_src + beta * kl_loss
+
+            # 检查 loss 是否为 nan，如果是，跳过这一步（最后一道防线）
+            if torch.isnan(loss):
+                print(f"[Warning] NaN loss detected at epoch {epoch}. Skipping batch.")
+                optimizer.zero_grad()
+                continue
+
+            loss.backward()
+
+            # 【关键修正】: 梯度裁剪，防止权重爆炸
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+            optimizer.step()
+
+            epoch_nll += nll_tgt.item() * len(yb_tgt)
+            epoch_kl += kl_loss.item() * len(yb_tgt)
+            count += len(yb_tgt)
+
+        if (epoch + 1) % 10 == 0:
+            print(f"  Ep {epoch + 1}/{args.s3_epochs} | NLL(T): {epoch_nll / count:.4f} | KL: {epoch_kl / count:.4f}")
+
+    torch.save({"model": model.state_dict()}, save_path)
+    print("  -> Stage 3 Checkpoint saved.")
+
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--data_dir", required=True,
-                    help="包含 src_delay.csv / tgt_delay_labeled.csv 的目录")
-    ap.add_argument("--mode", choices=["joint", "pretrain_src", "finetune_tgt"],
-                    default="joint",
-                    help="joint: src+tgt_l 一起训练；"
-                         "pretrain_src: 只用源域预训练；"
-                         "finetune_tgt: 在目标域微调，需要 --src_ckpt")
-    ap.add_argument("--src_ckpt", default=None,
-                    help="finetune_tgt 模式下要加载的源域 ckpt 路径")
-    ap.add_argument("--epochs", type=int, default=100)
-    ap.add_argument("--batch", type=int, default=256)
-    ap.add_argument("--lr", type=float, default=2e-3)
-    ap.add_argument("--hid", type=int, default=256)
-    ap.add_argument("--depth", type=int, default=4)
-    ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_dir", required=True)
+    parser.add_argument("--save_dir", default="./output_physics_fix")
+    parser.add_argument("--mode", default="all")
+    parser.add_argument("--hid", type=int, default=128)
+    parser.add_argument("--s1_epochs", type=int, default=50)
+    parser.add_argument("--s3_epochs", type=int, default=100)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    args = parser.parse_args()
 
-    device = args.device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if not os.path.exists(args.save_dir): os.makedirs(args.save_dir)
 
-    # ---------- 1) 读数据 ----------
-    src_csv = os.path.join(args.data_dir, "src_delay.csv")
-    tgt_l_csv = os.path.join(args.data_dir, "tgt_delay_labeled.csv")
+    print("[Info] Loading Scalers...")
+    x_mean, x_std, y_mean, y_std = load_scalers(args.data_dir)
 
-    df_src = pd.read_csv(src_csv)
-    df_tgt_l = pd.read_csv(tgt_l_csv)
+    src_ds = TabularDataset(os.path.join(args.data_dir, "src_delay.csv"), x_mean, x_std, y_mean, y_std)
+    tgt_ds = TabularDataset(os.path.join(args.data_dir, "tgt_train.csv"), x_mean, x_std, y_mean, y_std)
 
-    # =====================================================
-    # 2) 准备特征列 & 归一化参数
-    # =====================================================
-    if args.mode != "finetune_tgt":
-        # 预训练 / 联合训练：根据 src+tgt_l 的 cell_type 构造 one-hot
-        df_all = pd.concat([df_src, df_tgt_l], axis=0)
-        cell_types = sorted(df_all["cell_type"].astype(str).unique().tolist())
-        cell_type_cols = [f"cell_type_{ct}" for ct in cell_types]
+    src_loader = DataLoader(src_ds, batch_size=128, shuffle=True)
+    tgt_loader = DataLoader(tgt_ds, batch_size=32, shuffle=True)
 
-        numeric_cols = BASE_NUMERIC_COLS + cell_type_cols
+    model = DisentangledRegressor(len(NUMERIC_COLS), args.hid).to(device)
 
-        # 对三个 DataFrame 都补齐特征列
-        df_src = ensure_feature_cols(df_src, numeric_cols)
-        df_tgt_l = ensure_feature_cols(df_tgt_l, numeric_cols)
-        df_all_feat = ensure_feature_cols(df_all, numeric_cols)
+    ckpt_s1 = os.path.join(args.save_dir, "ckpt_s1.pt")
+    ckpt_s3 = os.path.join(args.save_dir, "ckpt_s3.pt")
 
-        if args.mode == "pretrain_src":
-            df_train = df_src
-            ckpt_name = "mlp_src_pretrain.pt"
-            print("[info] mode=pretrain_src, training on SRC only")
-        elif args.mode == "joint":
-            df_train = df_all_feat.reset_index(drop=True)
-            ckpt_name = "mlp_ckpt.pt"
-            print("[info] mode=joint, training on SRC + TGT_L")
-        else:
-            raise ValueError("unknown mode")
+    run_stage1(args, model, device, src_loader, ckpt_s1)
 
-        # ⚠️ 归一化参数用 SRC+TGT_L 的联合数据（加好特征之后的 df_all_feat）
-        x_all = df_all_feat[numeric_cols].astype(np.float32)
-        y_all = df_all_feat[[TARGET_COL]].astype(np.float32)
+    print("\n[Loading Stage 1 Checkpoint for Stage 3...]")
+    try:
+        s1 = torch.load(ckpt_s1)
+    except:
+        s1 = torch.load(ckpt_s1, weights_only=False)
 
-        x_mean = x_all.mean(0).values
-        x_std = (x_all.std(0).values + 1e-9)
-        y_mean = float(y_all.mean().values[0])
-        y_std = float(y_all.std().values[0] + 1e-9)
+    model.load_state_dict(s1["model"])
+    run_stage3(args, model, device, tgt_loader, src_loader, ckpt_s3)
 
-    else:
-        # finetune_tgt：从 src_ckpt 里加载 numeric_cols 和 scaler，不重新算
-        if args.src_ckpt is None:
-            raise SystemExit("[error] finetune_tgt 模式需要指定 --src_ckpt")
-
-        print(f"[info] finetune_tgt: load src ckpt from {args.src_ckpt}")
-        state_src = torch.load(args.src_ckpt, map_location=device)
-
-        numeric_cols = state_src["numeric_cols"]
-        x_mean = np.array(state_src["x_mean"], dtype=np.float32)
-        x_std = np.array(state_src["x_std"], dtype=np.float32)
-        y_mean = float(state_src["y_mean"])
-        y_std = float(state_src["y_std"])
-
-        # 用同样的特征列和 scaler 处理数据
-        df_src = ensure_feature_cols(df_src, numeric_cols)
-        df_tgt_l = ensure_feature_cols(df_tgt_l, numeric_cols)
-
-        df_train = df_tgt_l
-        ckpt_name = "mlp_tgt_finetune.pt"
-        print("[info] mode=finetune_tgt, training on TGT_L only (with SRC init)")
-
-    # 保存 scaler 信息（可选）
-    scaler_path = os.path.join(args.data_dir, "mlp_scaler.json")
-    json.dump(
-        {
-            "numeric_cols": numeric_cols,
-            "x_mean": x_mean.tolist(),
-            "x_std": x_std.tolist(),
-            "y_mean": y_mean,
-            "y_std": y_std,
-        },
-        open(scaler_path, "w"),
-        indent=2
-    )
-    print(f"[info] saved scaler to {scaler_path}")
-
-    # ---------- 3) Dataset / Dataloader ----------
-    train_ds = TimingDataset(df_train, numeric_cols, x_mean, x_std, y_mean, y_std)
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=args.batch,
-        shuffle=True,
-        drop_last=False,
-    )
-
-    # ---------- 4) 建模型 ----------
-    if args.mode == "finetune_tgt":
-        # 从 src 预训练 ckpt 里恢复网络结构和权重
-        hid_dim = int(state_src["hid_dim"])
-        depth = int(state_src["depth"])
-        model = MLPRegressor(
-            in_dim=len(numeric_cols),
-            hid_dim=hid_dim,
-            depth=depth,
-            dropout=0.0,
-        ).to(device)
-        model.load_state_dict(state_src["model"])
-        print(f"[info] loaded src-pretrained model: hid={hid_dim}, depth={depth}")
-    else:
-        # 重新初始化一个新模型
-        model = MLPRegressor(
-            in_dim=len(numeric_cols),
-            hid_dim=args.hid,
-            depth=args.depth,
-            dropout=0.0,
-        ).to(device)
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-
-    # ---------- 5) 训练 ----------
-    best_rmse = 1e9
-    best_state = None
-
-    for ep in range(1, args.epochs + 1):
-        train_loss = train_one_epoch(model, train_loader, optimizer, device)
-        print(f"[Epoch {ep}] train MSE (norm space) = {train_loss:.6f}")
-
-        # 附带在 SRC / TGT_L 上评估一下，方便观察迁移效果
-        mae_src, rmse_src = eval_dataset(model, df_src, numeric_cols, x_mean, x_std, y_mean, y_std, device, name="SRC")
-        mae_tgt, rmse_tgt = eval_dataset(model, df_tgt_l, numeric_cols, x_mean, x_std, y_mean, y_std, device, name="TGT_L")
-
-        # 以 TGT_L 的 RMSE 作为 early stopping 指标
-        if rmse_tgt < best_rmse:
-            best_rmse = rmse_tgt
-            best_state = {
-                "model": model.state_dict(),
-                "numeric_cols": numeric_cols,
-                "x_mean": x_mean.tolist(),
-                "x_std": x_std.tolist(),
-                "y_mean": y_mean,
-                "y_std": y_std,
-                "hid_dim": (int(state_src["hid_dim"]) if args.mode == "finetune_tgt" else args.hid),
-                "depth": (int(state_src["depth"]) if args.mode == "finetune_tgt" else args.depth),
-            }
-
-    # ---------- 6) 保存最优模型 ----------
-    ckpt_path = os.path.join(args.data_dir, ckpt_name)
-    torch.save(best_state, ckpt_path)
-    print(f"[info] Saved best MLP ckpt to {ckpt_path}, best target RMSE={best_rmse:.4f} ps")
+    print("\n[Done] All stages finished.")
 
 
 if __name__ == "__main__":

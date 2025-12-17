@@ -1,3 +1,5 @@
+# === Python代码文件: train_hgat.py ===
+
 import os
 import json
 import argparse
@@ -71,7 +73,6 @@ class Stage1Dataset(Dataset):
         self.df = pd.read_csv(csv_path)
         self.data_dir = data_dir
 
-        # 补全 pol_bit
         if "pol_bit" not in self.df.columns:
             self.df["pol_bit"] = (self.df["pol"].astype(str) == "rise").astype(
                 np.float32) if "pol" in self.df.columns else 0.0
@@ -85,8 +86,6 @@ class Stage1Dataset(Dataset):
         self.y = (y_raw - y_mean) / y_std
 
         self.cell_types = self.df["cell_type"].values
-
-        # 加载 source spice map
         with open(os.path.join(data_dir, "meta.json"), "r") as f:
             self.src_map = json.load(f).get("src_spi_by_cell", {})
 
@@ -125,8 +124,7 @@ class Stage2Dataset(Dataset):
 # --- 辅助：预计算 Embedding ---
 def precompute_z(data_dir, spice_file, mapping_key, enc, device):
     """
-    通用函数：根据 meta.json 中的 mapping_key (如 tgt_subckt_by_cell)
-    解析 spice_file，利用 enc 计算出 embedding 字典。
+    通用函数：根据 meta.json 中的 mapping_key 解析 spice_file，利用 enc 计算出 embedding 字典。
     """
     meta_path = os.path.join(data_dir, "meta.json")
     with open(meta_path, "r") as f:
@@ -137,9 +135,7 @@ def precompute_z(data_dir, spice_file, mapping_key, enc, device):
         print(f"[Warn] No mapping found for key '{mapping_key}' in meta.json")
         return {}
 
-    # 确定 SPICE 路径
     if not os.path.exists(spice_file):
-        # 尝试拼接 data_dir
         cand = os.path.join(data_dir, spice_file)
         if os.path.exists(cand):
             spice_file = cand
@@ -150,7 +146,6 @@ def precompute_z(data_dir, spice_file, mapping_key, enc, device):
     print(f"[Info] Parsing SPICE: {spice_file}")
     sp_text = open(spice_file, "r", encoding="utf-8", errors="ignore").read()
 
-    # 正则提取 subckt
     def get_subckt(name):
         patt = re.compile(r"\s*\.subckt\s+%s\b(.*?)\.ends\b" % re.escape(name), re.DOTALL | re.IGNORECASE)
         m = patt.search(sp_text)
@@ -162,7 +157,6 @@ def precompute_z(data_dir, spice_file, mapping_key, enc, device):
     with torch.no_grad():
         for ctype, sub_name in mapping.items():
             txt = get_subckt(sub_name)
-
             if not txt: continue
 
             devs = parse_transistors_spice(txt)
@@ -204,7 +198,7 @@ def run_stage1_pretraining(args, device, x_mean, x_std, y_mean, y_std):
     model = DisentangledRegressor(in_dim=len(NUMERIC_COLS), hid=args.hid, design_dim_override=args.design_dim).to(
         device)
 
-    # 3. 优化器 (训练所有参数)
+    # 3. 优化器
     optimizer = optim.Adam(list(enc.parameters()) + list(model.parameters()), lr=args.lr)
 
     scheduler = None
@@ -214,10 +208,9 @@ def run_stage1_pretraining(args, device, x_mean, x_std, y_mean, y_std):
             min_lr=args.min_lr
         )
 
-
-    # 4. 预计算源域 Z
+    # 4. 预计算源域 Z (缓存图)
     print("[Stage 1] Caching Source Graphs (CPU Pre-processing)...")
-    graph_cache = {}  # cell_type -> (g, feats)
+    graph_cache = {}
 
     with open(os.path.join(args.data_dir, "meta.json"), 'r') as f:
         src_map = json.load(f).get("src_spi_by_cell", {})
@@ -249,7 +242,8 @@ def run_stage1_pretraining(args, device, x_mean, x_std, y_mean, y_std):
     bad_epochs = 0
 
     for epoch in range(args.s1_epochs):
-        epoch_loss_val = 0  # 避免变量名冲突
+        epoch_loss_val = 0
+        epoch_kl_val = 0
         count = 0
 
         for batch in loader:
@@ -275,8 +269,13 @@ def run_stage1_pretraining(args, device, x_mean, x_std, y_mean, y_std):
             yb = ys[valid_indices]
 
             optimizer.zero_grad()
-            mu, logv, z_q, z_p = model(xb, zb)
-            loss, _, _ = total_loss(yb, mu, logv, z_q, z_p, kl_weight=0.05)
+
+            # --- 修改部分: 解包新的返回值 ---
+            # model 返回: mu_y, logvar_y, (zn_mu, zn_logvar), zn
+            mu_pred, logvar_pred, z_q_tuple, _ = model(xb, zb)
+
+            # z_q=z_q_tuple 触发 KL 计算
+            loss, _, kl_item = total_loss(yb, mu_pred, logvar_pred, z_q=z_q_tuple, z_p=None, kl_weight=args.kl_weight)
 
             loss.backward()
             if getattr(args, "grad_clip", 0.0) and args.grad_clip > 0:
@@ -284,21 +283,19 @@ def run_stage1_pretraining(args, device, x_mean, x_std, y_mean, y_std):
             optimizer.step()
 
             epoch_loss_val += loss.item() * len(yb)
+            epoch_kl_val += kl_item * len(yb)
             count += len(yb)
 
         avg_loss = epoch_loss_val / (count + 1e-6)
+        avg_kl = epoch_kl_val / (count + 1e-6)
+
         if scheduler is not None:
             scheduler.step(avg_loss)
         cur_lr = optimizer.param_groups[0]["lr"]
+
         if (epoch + 1) % 5 == 0:
-            print(f"  [S1] Epoch {epoch + 1}/{args.s1_epochs} | Loss: {avg_loss:.4f} | LR: {cur_lr:.2e}")
-        else:
-            # keep old print cadence quiet
-            pass
-
-        # best ckpt + early stop
-
-            print(f"  [S1] Epoch {epoch + 1}/{args.s1_epochs} | Loss: {avg_loss:.4f}")
+            print(
+                f"  [S1] Epoch {epoch + 1}/{args.s1_epochs} | Loss: {avg_loss:.4f} | KL: {avg_kl:.4f} | LR: {cur_lr:.2e}")
 
         if avg_loss < best_loss:
             best_loss = avg_loss
@@ -313,7 +310,7 @@ def run_stage1_pretraining(args, device, x_mean, x_std, y_mean, y_std):
         else:
             bad_epochs += 1
             if getattr(args, "early_patience", 0) and args.early_patience > 0 and bad_epochs >= args.early_patience:
-                print(f"  [S1] Early stop at epoch {epoch+1} (no improvement for {bad_epochs} epochs).")
+                print(f"  [S1] Early stop at epoch {epoch + 1} (no improvement for {bad_epochs} epochs).")
                 break
 
     print(f"[Stage 1] Finished. Checkpoint saved to: {os.path.join(args.save_dir, 'ckpt_stage1_best.pt')}")
@@ -348,7 +345,7 @@ def run_stage2_transfer(args, device, src_ckpt_path, x_mean, x_std, y_mean, y_st
     try:
         model.load_state_dict(state["model"], strict=True)
     except:
-        print("[Warn] MLP 结构不完全匹配，尝试非严格加载或调整 shape...")
+        print("[Warn] 结构不完全匹配 (可能是引入了变分层)，尝试非严格加载...")
         model.load_state_dict(state["model"], strict=False)
 
     model = model.to(device)
@@ -396,7 +393,7 @@ def run_stage2_transfer(args, device, src_ckpt_path, x_mean, x_std, y_mean, y_st
     for epoch in range(args.s2_epochs):
         # --- Train ---
         model.train()
-        epoch_loss = 0  # <--- 修正点：改名了
+        epoch_loss = 0
         for xb, yb, cts in train_dl:
             xb, yb = xb.to(device), yb.to(device)
 
@@ -404,9 +401,11 @@ def run_stage2_transfer(args, device, src_ckpt_path, x_mean, x_std, y_mean, y_st
             zb = torch.cat(z_list, dim=0)
 
             optimizer.zero_grad()
-            mu, logv, z_q, z_p = model(xb, zb)
-            # 现在可以正常调用函数 total_loss 了
-            loss, _, _ = total_loss(yb, mu, logv, z_q, z_p, kl_weight=0.01)
+
+            # --- 修改部分: 解包 ---
+            mu_pred, logvar_pred, z_q_tuple, _ = model(xb, zb)
+
+            loss, _, _ = total_loss(yb, mu_pred, logvar_pred, z_q=z_q_tuple, z_p=None, kl_weight=args.kl_weight)
 
             loss.backward()
             if getattr(args, "grad_clip", 0.0) and args.grad_clip > 0:
@@ -427,11 +426,13 @@ def run_stage2_transfer(args, device, src_ckpt_path, x_mean, x_std, y_mean, y_st
                     z_list = [z_map[ct] if ct in z_map else torch.zeros(1, design_dim, device=device) for ct in cts]
                     zb = torch.cat(z_list, dim=0)
 
+                    # 验证时，model.reparameterize 返回确定性的 mu，忽略后面返回值
                     mu, _, _, _ = model(xb, zb)
 
                     pred_ps = mu * y_std + y_mean
                     true_ps = yb * y_std + y_mean
 
+                    # 为了稳定性，可以加个 tanh 截断
                     max_abs = 10.0
                     mu_t = max_abs * torch.tanh(mu / max_abs)
                     pred_ps_t = mu_t * y_std + y_mean
@@ -461,11 +462,11 @@ def run_stage2_transfer(args, device, src_ckpt_path, x_mean, x_std, y_mean, y_st
         else:
             bad_epochs += 1
             if getattr(args, "early_patience", 0) and args.early_patience > 0 and bad_epochs >= args.early_patience:
-                print(f"  [S2] Early stop at epoch {epoch+1} (no improvement for {bad_epochs} epochs).")
+                print(f"  [S2] Early stop at epoch {epoch + 1} (no improvement for {bad_epochs} epochs).")
                 break
 
     print(f"[Stage 2] Finished. Best Val MAE: {best_mae:.4f} ps")
-    print(f"Final Model saved to: {os.path.join(args.save_dir, 'ckpt_transfer_best.pt')}")
+    print(f" Model saved to: {os.path.join(args.save_dir, 'ckpt_transfer_best.pt')}")
 
 
 # ==========================================
@@ -485,6 +486,7 @@ def main():
     parser.add_argument("--s1_epochs", type=int, default=50, help="Stage 1 Epochs")
     parser.add_argument("--s2_epochs", type=int, default=200, help="Stage 2 Epochs")
     parser.add_argument("--lr", type=float, default=1e-3, help="base learning rate")
+
     # --- Auto LR / Early stop ---
     parser.add_argument("--auto_lr", action="store_true", help="enable ReduceLROnPlateau scheduler")
     parser.add_argument("--lr_patience", type=int, default=10, help="epochs w/o improvement before reducing LR")
@@ -492,6 +494,9 @@ def main():
     parser.add_argument("--min_lr", type=float, default=1e-6, help="minimum LR for scheduler")
     parser.add_argument("--early_patience", type=int, default=30, help="early stop after N bad epochs (0=disable)")
     parser.add_argument("--grad_clip", type=float, default=1.0, help="clip grad norm (0=disable)")
+
+    # --- KL Divergence ---
+    parser.add_argument("--kl_weight", type=float, default=0.01, help="Weight for KL Divergence Loss")
 
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
 
