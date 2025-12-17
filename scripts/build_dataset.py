@@ -17,27 +17,88 @@ from spi2graph import parse_transistors_spice, extract_wl_features
 # 配置：要保留的 cell 类型
 # ======================================================
 
-TARGET_CELL_TYPES = ["INVX1", "INVX2", "NANDX1", "NORX1", "XORX2"]
+TARGET_CELL_TYPES = ["AND2X2","AND2X4","AND3X1","AND3X2","AND3X4","AND4X1","AND4X2",
+                     "BUFX2","BUFX4","BUFX8","BUFX16",
+                     "INVX1", "INVX2","INVX4","INVX8",
+                     "NAND2X1","NAND2X2","NAND3X1","NAND3X2",
+                     "NOR2X1", "NOR2X2", "NOR3X1", "NOR3X2",
+                     "OR2X2","OR2X4","OR3X1","OR3X2","OR3X4","OR4X1","OR4X2",
+                     "XNOR2X2","XOR2X2",
+                     ]
 
 # -------- 源域（Nangate）每个 cell 对应一个 SPI 文件 --------
 SRC_CELL_SPI_FILES = {
+    "AND2X2": "AND2_X2_lpe.spi",
+    "AND2X4": "AND2_X4_lpe.spi",
+    "AND3X1": "AND3_X1_lpe.spi",
+    "AND3X2": "AND3_X2_lpe.spi",
+    "AND3X4": "AND2_X4_lpe.spi",
+    "AND4X1": "AND4_X1_lpe.spi",
+    "AND4X2": "AND4_X2_lpe.spi",
+    "BUFX2": "BUF_X2_lpe.spi",
+    "BUFX4": "BUF_X4_lpe.spi",
+    "BUFX8": "BUF_X8_lpe.spi",
+    "BUFX16": "BUF_X16_lpe.spi",
     "INVX1": "INV_X1_lpe.spi",
     "INVX2": "INV_X2_lpe.spi",
-    "NANDX1": "NAND2_X1_lpe.spi",
-    "NORX1": "NOR2_X1_lpe.spi",
-    "XORX2": "XOR2_X2_lpe.spi",
+    "INVX4": "INV_X4_lpe.spi",
+    "INVX8": "INV_X8_lpe.spi",
+    "NAND2X1": "NAND2_X1_lpe.spi",
+    "NAND2X2": "NAND2_X2_lpe.spi",
+    "NAND3X1": "NAND3_X1_lpe.spi",
+    "NAND3X2": "NAND3_X2_lpe.spi",
+    "NOR2X1": "NOR2_X1_lpe.spi",
+    "NOR2X2": "NOR2_X2_lpe.spi",
+    "NOR3X1": "NOR3_X1_lpe.spi",
+    "NOR3X2": "NOR3_X2_lpe.spi",
+    "OR2X2": "OR2_X2_lpe.spi",
+    "OR2X4": "OR2_X4_lpe.spi",
+    "OR3X1": "OR3_X1_lpe.spi",
+    "OR3X2": "OR3_X2_lpe.spi",
+    "OR3X4": "OR3_X4_lpe.spi",
+    "OR4X1": "OR4_X1_lpe.spi",
+    "OR4X2": "OR4_X2_lpe.spi",
+    "XOR2X2": "XOR2_X2_lpe.spi",
+    "XNOR2X2": "XNOR2_X2_lpe.spi",
 }
 
 # -------- 目标域（ASAP7）大 SP 文件里的 subckt 名 --------
 # 这里是 “规范化 cell_type” -> “ASAP7 SP 里的 cell 子电路名”
 ASAP7_CELL_SUBCKT = {
+    "AND2X2": "AND2x2_ASAP7_6t_L",
+    "AND2X4": "AND2x4_ASAP7_6t_L",
+    "AND3X1": "AND3x1_ASAP7_6t_L",
+    "AND3X2": "AND3x2_ASAP7_6t_L",
+    "AND3X4": "AND3x4_ASAP7_6t_L",
+    "AND4X1": "AND4x1_ASAP7_6t_L",
+    "AND4X2": "AND4x2_ASAP7_6t_L",
+    "BUFX2": "BUFx2_ASAP7_6t_L",
+    "BUFX4": "BUFx4_ASAP7_6t_L",
+    "BUFX8": "BUFx8_ASAP7_6t_L",
+    "BUFX16": "BUFx16q_ASAP7_6t_L",
     "INVX1": "INVx1_ASAP7_6t_L",
     "INVX2": "INVx2_ASAP7_6t_L",
-    "NANDX1": "NAND2x1_ASAP7_6t_L",
-    "NORX1": "NOR2x1_ASAP7_6t_L",
+    "INVX4": "INVx4_ASAP7_6t_L",
+    "INVX8": "INVx8_ASAP7_6t_L",
+    "NAND2X1": "NAND2x1_ASAP7_6t_L",
+    "NAND2X2": "NAND2x2_ASAP7_6t_L",
+    "NAND3X1": "NAND3x1_ASAP7_6t_L",
+    "NAND3X2": "NAND3x2_ASAP7_6t_L",
+    "NOR2X1": "NOR2x1_ASAP7_6t_L",
+    "NOR2X2": "NOR2x2_ASAP7_6t_L",
+    "NOR3X1": "NOR3x1_ASAP7_6t_L",
+    "NOR3X2": "NOR3x2_ASAP7_6t_L",
+    "OR2X2": "OR2x2_ASAP7_6t_L",
+    "OR2X4": "OR2x4_ASAP7_6t_L",
+    "OR3X1": "OR3x1_ASAP7_6t_L",
+    "OR3X2": "OR3x2_ASAP7_6t_L",
+    "OR3X4": "OR3x4_ASAP7_6t_L",
+    "OR4X1": "OR4x1_ASAP7_6t_L",
+    "OR4X2": "OR2x2_ASAP7_6t_L",
     # XORX1 在 SIMPLE lib 中对应 XOR2xp5_ASAP7_6t_L，
     # 如果 lib 里没有 XORX1 的 arc，这个映射不会被实际用到。
-    "XORX2": "XOR2x2_ASAP7_6t_L",
+    "XOR2X2": "XOR2x2_ASAP7_6t_L",
+    "XNOR2X2": "XNOR2x2_ASAP7_6t_L",
 }
 
 ZERO_SPI_FEATS = {

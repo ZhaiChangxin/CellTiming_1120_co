@@ -176,62 +176,158 @@ def _find_all_timing_arcs(pin_block: str):
     return arcs
 
 
-# ===================== 关键：只保留 5 类 & 2 输入 =====================
+
 
 def canonical_cell_type(cell_name: str):
-    """
-    归一化 cell_name → {INVX1, INVX2, NANDX1, NORX1, XORX1}
-
-    支持：
-    - Nangate45:  INV_X1 / INV_X2
-    - ASAP7:      INVx1_ASAP7_... / INVx2_ASAP7_...
-
-    规则：
-    - INV：严格区分 x1/x2，不误匹配 INV_X16 / TINV_X1
-    - NAND/NOR/XOR：只接受 2 输入（即 NAND2 / NOR2 / XOR2）
-    - 排除 XNOR
-    """
-
     n = cell_name.upper().replace('"', '').replace(" ", "")
-
-    # ====================================================
-    # 1) 处理 INV 系列
-    # ====================================================
-
-    # ---------- Nangate45 ----------
-    # INV_X1 / INV_X2
+    # ---------- Nangate45 的AND----------
+    if re.fullmatch(r"AND2_X2", n):
+        return "AND2X2"
+    if re.fullmatch(r"AND2_X4", n):
+        return "AND2X4"
+    if re.fullmatch(r"AND3_X1", n):
+        return "AND3X1"
+    if re.fullmatch(r"AND3_X2", n):
+        return "AND3X2"
+    if re.fullmatch(r"AND3_X4", n):
+        return "AND3X4"
+    if re.fullmatch(r"AND4_X1", n):
+        return "AND4X1"
+    if re.fullmatch(r"AND4_X2", n):
+        return "AND4X2"
+    # ---------- ASAP7 的AND----------
+    if re.fullmatch(r"AND2X2_ASAP7_6T_L", n):
+        return "AND2X2"
+    if re.fullmatch(r"AND2X4_ASAP7_6T_L", n):
+        return "AND2X4"
+    if re.fullmatch(r"AND3X1_ASAP7_6T_L", n):
+        return "AND3X1"
+    if re.fullmatch(r"AND3X2_ASAP7_6T_L", n):
+        return "AND3X2"
+    if re.fullmatch(r"AND3X4_ASAP7_6T_L", n):
+        return "AND3X4"
+    if re.fullmatch(r"AND4X1_ASAP7_6T_L", n):
+        return "AND4X1"
+    if re.fullmatch(r"AND4X2_ASAP7_6T_L", n):
+        return "AND4X2"
+    # ---------- Nangate45 的BUF----------
+    if re.fullmatch(r"BUF_X2", n):
+        return "BUFX2"
+    if re.fullmatch(r"BUF_X4", n):
+        return "BUFX4"
+    if re.fullmatch(r"BUF_X8", n):
+        return "BUFX8"
+    if re.fullmatch(r"BUF_X16", n):
+        return "BUFX16"
+    # ---------- ASAP7 的BUF----------
+    if re.fullmatch(r"BUFX2_ASAP7_6T_L", n):
+        return "BUFX2"
+    if re.fullmatch(r"BUFX4_ASAP7_6T_L", n):
+        return "BUFX4"
+    if re.fullmatch(r"BUFX8_ASAP7_6T_L", n):
+        return "BUFX8"
+    if re.fullmatch(r"BUFX16_ASAP7_6T_L", n):
+        return "BUFX16"
+    # ---------- Nangate45 的INV----------
     if re.fullmatch(r"INV_X1", n):
         return "INVX1"
     if re.fullmatch(r"INV_X2", n):
         return "INVX2"
+    if re.fullmatch(r"INV_X4", n):
+        return "INVX4"
+    if re.fullmatch(r"INV_X8", n):
+        return "INVX8"
 
-    # ---------- ASAP7 ----------
-    # INVx1_ASAP7_6t_L  → uppercase 后是 INVX1_ASAP7_6T_L
-    if n.startswith("INVX1_ASAP7") or "_INVX1_" in n:
+    # ---------- ASAP7 的INV----------
+    if re.fullmatch(r"INVX1_ASAP7_6T_L", n):
         return "INVX1"
-    if n.startswith("INVX2_ASAP7") or "_INVX2_" in n:
+    if re.fullmatch(r"INVX2_ASAP7_6T_L", n):
         return "INVX2"
+    if re.fullmatch(r"INVX4_ASAP7_6T_L", n):
+        return "INVX4"
+    if re.fullmatch(r"INVX8_ASAP7_6T_L", n):
+        return "INVX8"
 
-    # ====================================================
-    # 2) NAND2 → NANDX1
-    # ====================================================
-    # 支持 Nangate & ASAP7，如:
-    #   NAND2_X1
-    #   NAND2x1_ASAP7_6t_L
-    if n.startswith("NAND2") and "X1" in n:
-        return "NANDX1"
+    # ---------- Nangate45 的NAND----------
+    if re.fullmatch(r"NAND2_X1", n):
+        return "NAND2X1"
+    if re.fullmatch(r"NAND2_X2", n):
+        return "NAND2X2"
+    if re.fullmatch(r"NAND3_X1", n):
+        return "NAND3X1"
+    if re.fullmatch(r"NAND3_X2", n):
+        return "NAND3X2"
+    # ---------- ASAP7 的NAND----------
+    if re.fullmatch(r"NAND2X1_ASAP7_6T_L", n):
+        return "NAND2X1"
+    if re.fullmatch(r"NAND2X2_ASAP7_6T_L", n):
+        return "NAND2X2"
+    if re.fullmatch(r"NAND3X1_ASAP7_6T_L", n):
+        return "NAND3X1"
+    if re.fullmatch(r"NAND3X2_ASAP7_6T_L", n):
+        return "NAND3X2"
 
-    # ====================================================
-    # 3) NOR2 → NORX1（排除 XNOR）
-    # ====================================================
-    if n.startswith("NOR2") and "X1" in n and "XNOR" not in n:
-        return "NORX1"
+    # ---------- Nangate45 的NOR----------
+    if re.fullmatch(r"NOR2_X1", n):
+        return "NOR2X1"
+    if re.fullmatch(r"NOR2_X2", n):
+        return "NOR2X2"
+    if re.fullmatch(r"NOR3_X1", n):
+        return "NOR3X1"
+    if re.fullmatch(r"NOR3_X2", n):
+        return "NOR3X2"
+    # ---------- ASAP7 的NOR----------
+    if re.fullmatch(r"NOR2X1_ASAP7_6T_L", n):
+        return "NOR2X1"
+    if re.fullmatch(r"NOR2X2_ASAP7_6T_L", n):
+        return "NOR2X2"
+    if re.fullmatch(r"NOR3X1_ASAP7_6T_L", n):
+        return "NOR3X1"
+    if re.fullmatch(r"NOR3X2_ASAP7_6T_L", n):
+        return "NOR3X2"
+    # ---------- Nangate45 的OR----------
+    if re.fullmatch(r"OR2_X2", n):
+        return "OR2X2"
+    if re.fullmatch(r"OR2_X4", n):
+        return "OR2X4"
+    if re.fullmatch(r"OR3_X1", n):
+        return "OR3X1"
+    if re.fullmatch(r"OR3_X2", n):
+        return "OR3X2"
+    if re.fullmatch(r"OR3_X4", n):
+        return "OR3X4"
+    if re.fullmatch(r"OR4_X1", n):
+        return "OR4X1"
+    if re.fullmatch(r"OR4_X2", n):
+        return "OR4X2"
+    # ---------- ASAP7 的OR----------
+    if re.fullmatch(r"OR2X2_ASAP7_6T_L", n):
+        return "OR2X2"
+    if re.fullmatch(r"OR2X4_ASAP7_6T_L", n):
+        return "OR2X4"
+    if re.fullmatch(r"OR3X1_ASAP7_6T_L", n):
+        return "OR3X1"
+    if re.fullmatch(r"OR3X2_ASAP7_6T_L", n):
+        return "OR3X2"
+    if re.fullmatch(r"OR3X4_ASAP7_6T_L", n):
+        return "OR3X4"
+    if re.fullmatch(r"OR4X1_ASAP7_6T_L", n):
+        return "OR4X1"
+    if re.fullmatch(r"OR4X2_ASAP7_6T_L", n):
+        return "OR4X2"
+    # ---------- Nangate45 的XOR----------
+    if re.fullmatch(r"XOR2_X2", n):
+        return "XOR2X2"
+    # ---------- ASAP7 的XOR----------
+    if re.fullmatch(r"XOR2X2_ASAP7_6T_L", n):
+        return "XOR2X2"
 
-    # ====================================================
-    # 4) XOR2 → XORX1（排除 XNOR）
-    # ====================================================
-    if n.startswith("XOR2") and "X1" in n and "XNOR" not in n:
-        return "XORX1"
+    # ---------- Nangate45 的XNOR----------
+    if re.fullmatch(r"XNOR2_X2", n):
+        return "XNOR2X2"
+    # ---------- ASAP7 的XNOR----------
+    if re.fullmatch(r"XOR2X2_ASAP7_6T_L", n):
+        return "XNOR2X2"
 
     return None
 
