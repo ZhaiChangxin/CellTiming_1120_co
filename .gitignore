@@ -1,0 +1,4 @@
+
+# checkpoints
+ckpt_*.pt
+**/ckpt_*.pt
