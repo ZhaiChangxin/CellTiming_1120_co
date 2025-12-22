@@ -1,43 +1,104 @@
-# === Python代码文件: build_dataset.py (7:2:1 版本) ===
+# === Pythonä»£ç æä»¶: build_dataset.py (ä¸¥æ ¼ Cell-Based ååç) ===
 
 import argparse
 import os
 import json
+import re
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 
 import numpy as np
 import pandas as pd
 
+# åè®¾è¿äºåºæä»¶åä½ æ¬å°ç¯å¢ä¸è´
 from parse_lib import parse_cell_arcs
 from spi2graph import parse_transistors_spice, extract_wl_features
 
-
 # ======================================================
-# 配置：要保留的 cell 类型
+# éç½®ï¼è¦ä¿çç cell ç±»å (å·²æ´æ°ä¸ºä½ æä¾çæ©ååè¡¨)
 # ======================================================
 
-TARGET_CELL_TYPES = ["INVX1", "INVX2", "NANDX1", "NORX1", "XORX2"]
+TARGET_CELL_TYPES = [
+    "AND2X2", "AND2X4", "AND3X1", "AND3X2", "AND3X4", "AND4X1", "AND4X2",
+    "BUFX2", "BUFX4", "BUFX8", "BUFX16",
+    "INVX1", "INVX2", "INVX4", "INVX8",
+    "NAND2X1", "NAND2X2", "NAND3X1", "NAND3X2",
+    "NOR2X1", "NOR2X2", "NOR3X1", "NOR3X2",
+    "OR2X2", "OR2X4", "OR3X1", "OR3X2", "OR3X4", "OR4X1", "OR4X2",
+    "XNOR2X2", "XOR2X2",
+]
 
-# -------- 源域（Nangate）每个 cell 对应一个 SPI 文件 --------
+# -------- æºåï¼Nangateï¼æ¯ä¸ª cell å¯¹åºä¸ä¸ª SPI æä»¶ --------
 SRC_CELL_SPI_FILES = {
+    "AND2X2": "AND2_X2_lpe.spi",
+    "AND2X4": "AND2_X4_lpe.spi",
+    "AND3X1": "AND3_X1_lpe.spi",
+    "AND3X2": "AND3_X2_lpe.spi",
+    "AND3X4": "AND2_X4_lpe.spi",
+    # æ³¨æï¼åæ å°ä¼¼ä¹ç¨äº AND2_X4ï¼å¦ææ¯ç¬è¯¯è¯·èªè¡ä¿®æ­£ï¼è¿éä¿çåæ ·
+    "AND4X1": "AND4_X1_lpe.spi",
+    "AND4X2": "AND4_X2_lpe.spi",
+    "BUFX2": "BUF_X2_lpe.spi",
+    "BUFX4": "BUF_X4_lpe.spi",
+    "BUFX8": "BUF_X8_lpe.spi",
+    "BUFX16": "BUF_X16_lpe.spi",
     "INVX1": "INV_X1_lpe.spi",
     "INVX2": "INV_X2_lpe.spi",
-    "NANDX1": "NAND2_X1_lpe.spi",
-    "NORX1": "NOR2_X1_lpe.spi",
-    "XORX2": "XOR2_X2_lpe.spi",
+    "INVX4": "INV_X4_lpe.spi",
+    "INVX8": "INV_X8_lpe.spi",
+    "NAND2X1": "NAND2_X1_lpe.spi",
+    "NAND2X2": "NAND2_X2_lpe.spi",
+    "NAND3X1": "NAND3_X1_lpe.spi",
+    "NAND3X2": "NAND3_X2_lpe.spi",
+    "NOR2X1": "NOR2_X1_lpe.spi",
+    "NOR2X2": "NOR2_X2_lpe.spi",
+    "NOR3X1": "NOR3_X1_lpe.spi",
+    "NOR3X2": "NOR3_X2_lpe.spi",
+    "OR2X2": "OR2_X2_lpe.spi",
+    "OR2X4": "OR2_X4_lpe.spi",
+    "OR3X1": "OR3_X1_lpe.spi",
+    "OR3X2": "OR3_X2_lpe.spi",
+    "OR3X4": "OR3_X4_lpe.spi",
+    "OR4X1": "OR4_X1_lpe.spi",
+    "OR4X2": "OR4_X2_lpe.spi",
+    "XOR2X2": "XOR2_X2_lpe.spi",
+    "XNOR2X2": "XNOR2_X2_lpe.spi",
 }
 
-# -------- 目标域（ASAP7）大 SP 文件里的 subckt 名 --------
-# 这里是 “规范化 cell_type” -> “ASAP7 SP 里的 cell 子电路名”
+# -------- ç®æ åï¼ASAP7ï¼å¤§ SP æä»¶éç subckt å --------
 ASAP7_CELL_SUBCKT = {
+    "AND2X2": "AND2x2_ASAP7_6t_L",
+    "AND2X4": "AND2x4_ASAP7_6t_L",
+    "AND3X1": "AND3x1_ASAP7_6t_L",
+    "AND3X2": "AND3x2_ASAP7_6t_L",
+    "AND3X4": "AND3x4_ASAP7_6t_L",
+    "AND4X1": "AND4x1_ASAP7_6t_L",
+    "AND4X2": "AND4x2_ASAP7_6t_L",
+    "BUFX2": "BUFx2_ASAP7_6t_L",
+    "BUFX4": "BUFx4_ASAP7_6t_L",
+    "BUFX8": "BUFx8_ASAP7_6t_L",
+    "BUFX16": "BUFx16q_ASAP7_6t_L",
     "INVX1": "INVx1_ASAP7_6t_L",
     "INVX2": "INVx2_ASAP7_6t_L",
-    "NANDX1": "NAND2x1_ASAP7_6t_L",
-    "NORX1": "NOR2x1_ASAP7_6t_L",
-    # XORX1 在 SIMPLE lib 中对应 XOR2xp5_ASAP7_6t_L，
-    # 如果 lib 里没有 XORX1 的 arc，这个映射不会被实际用到。
-    "XORX2": "XOR2x2_ASAP7_6t_L",
+    "INVX4": "INVx4_ASAP7_6t_L",
+    "INVX8": "INVx8_ASAP7_6t_L",
+    "NAND2X1": "NAND2x1_ASAP7_6t_L",
+    "NAND2X2": "NAND2x2_ASAP7_6t_L",
+    "NAND3X1": "NAND3x1_ASAP7_6t_L",
+    "NAND3X2": "NAND3x2_ASAP7_6t_L",
+    "NOR2X1": "NOR2x1_ASAP7_6t_L",
+    "NOR2X2": "NOR2x2_ASAP7_6t_L",
+    "NOR3X1": "NOR3x1_ASAP7_6t_L",
+    "NOR3X2": "NOR3x2_ASAP7_6t_L",
+    "OR2X2": "OR2x2_ASAP7_6t_L",
+    "OR2X4": "OR2x4_ASAP7_6t_L",
+    "OR3X1": "OR3x1_ASAP7_6t_L",
+    "OR3X2": "OR3x2_ASAP7_6t_L",
+    "OR3X4": "OR3x4_ASAP7_6t_L",
+    "OR4X1": "OR4x1_ASAP7_6t_L",
+    "OR4X2": "OR2x2_ASAP7_6t_L",  # æ³¨æï¼åæ å°è¿éç¨äº OR2x2ï¼è¯·ç¡®è®¤æ¯å¦ä¸ºç¬è¯¯ï¼è¿éä¿çåæ ·
+    "XOR2X2": "XOR2x2_ASAP7_6t_L",
+    "XNOR2X2": "XNOR2x2_ASAP7_6t_L",
 }
 
 ZERO_SPI_FEATS = {
@@ -48,17 +109,17 @@ ZERO_SPI_FEATS = {
 
 
 # ======================================================
-# 工具函数：SPICE 特征
+# å·¥å·å½æ°ï¼SPICE ç¹å¾
 # ======================================================
 
 def parse_spi_features_from_text(text: str) -> Dict[str, float]:
     """
-    从一段 SPICE / SP 文本里抽取器件物理特征。
+    ä»ä¸æ®µ SPICE / SP ææ¬éæ½åå¨ä»¶ç©çç¹å¾ã
     """
     devs = parse_transistors_spice(text)
     feats = extract_wl_features(devs)
 
-    # 将 W/L 从米(m)转换为微米(um)，与 hgat.py 中的特征处理保持一致
+    # å° W/L ä»ç±³(m)è½¬æ¢ä¸ºå¾®ç±³(um)ï¼ä¸ hgat.py ä¸­çç¹å¾å¤çä¿æä¸è´
     wp_sum = float(feats.get("wp_sum", 0.0)) * 1e6
     wn_sum = float(feats.get("wn_sum", 0.0)) * 1e6
     wp_over_wn = float(feats.get("wp_over_wn", 0.0) if wn_sum != 0 else 0.0)
@@ -72,8 +133,8 @@ def parse_spi_features_from_text(text: str) -> Dict[str, float]:
 
 def parse_spi_features(path: str) -> Dict[str, float]:
     """
-    从文件路径读取后调用 parse_spi_features_from_text，
-    主要用于 Nangate45 的每个 cell 独立 .spi。
+    ä»æä»¶è·¯å¾è¯»ååè°ç¨ parse_spi_features_from_textï¼
+    ä¸»è¦ç¨äº Nangate45 çæ¯ä¸ª cell ç¬ç« .spiã
     """
     if not os.path.exists(path):
         return dict(ZERO_SPI_FEATS)
@@ -83,13 +144,13 @@ def parse_spi_features(path: str) -> Dict[str, float]:
 
 
 # ======================================================
-# 扫描 lib
+# æ«æ lib
 # ======================================================
 
 def collect_libs(root: str):
     """
-    递归收集 root 下所有 .lib 文件
-    返回绝对路径列表，排序去重。
+    éå½æ¶é root ä¸ææ .lib æä»¶
+    è¿åç»å¯¹è·¯å¾åè¡¨ï¼æåºå»éã
     """
     root_path = Path(root)
     if not root_path.exists():
@@ -104,14 +165,14 @@ def collect_libs(root: str):
 
 
 # ======================================================
-# ASAP7 的「全库」SP（兜底用）
+# ASAP7 çãå¨åºãSPï¼ååºç¨ï¼
 # ======================================================
 
 def choose_asap7_sp(root_or_file: str) -> str:
     """
-    兼容两种情况：
-    1) 传进来的是目录：在目录下自动找 asap7sc6t_26_L_*.sp；
-    2) 传进来的是文件：直接返回这个文件。
+    å¼å®¹ä¸¤ç§æåµï¼
+    1) ä¼ è¿æ¥çæ¯ç®å½ï¼å¨ç®å½ä¸èªå¨æ¾ asap7sc6t_26_L_*.spï¼
+    2) ä¼ è¿æ¥çæ¯æä»¶ï¼ç´æ¥è¿åè¿ä¸ªæä»¶ã
     """
     p = Path(root_or_file)
     if p.is_file():
@@ -121,18 +182,18 @@ def choose_asap7_sp(root_or_file: str) -> str:
     if not root_path.exists():
         return ""
 
-    # 优先常见命名
+    # ä¼åå¸¸è§å½å
     for name in ["asap7sc6t_26_L_211010.sp", "asap7sc6t_26_L.sp"]:
         cand = list(root_path.rglob(name))
         if cand:
             return str(sorted(cand)[0])
 
-    # 否则任意 .sp
+    # å¦åä»»æ .sp
     cand = list(root_path.rglob("*.sp"))
     if cand:
         return str(sorted(cand)[0])
 
-    # 再不行就试试 .spi
+    # åä¸è¡å°±è¯è¯ .spi
     cand = list(root_path.rglob("*.spi"))
     if cand:
         return str(sorted(cand)[0])
@@ -141,19 +202,16 @@ def choose_asap7_sp(root_or_file: str) -> str:
 
 
 # ======================================================
-# 从大 SP 文件中按 subckt 名提取 netlist 文本
+# ä»å¤§ SP æä»¶ä¸­æ subckt åæå netlist ææ¬
 # ======================================================
-
-import re
 
 def extract_subckt_text(sp_text: str, subckt_name: str) -> str:
     """
-    在一个大 SP 文件文本 sp_text 中，找到：
+    å¨ä¸ä¸ªå¤§ SP æä»¶ææ¬ sp_text ä¸­ï¼æ¾å°ï¼
         .subckt <subckt_name> ...
         ...
         .ends
-    之间的所有内容并返回。
-    注意：asap7sc6t_26_L_211010.sp 里的 .ends 通常不带名字，所以只匹配 '.ends'。
+    ä¹é´çææåå®¹å¹¶è¿åã
     """
     lines = sp_text.splitlines(keepends=True)
     collecting = False
@@ -176,12 +234,12 @@ def extract_subckt_text(sp_text: str, subckt_name: str) -> str:
 
 
 # ======================================================
-# 源域：每个 cell 一个 SPI（Nangate45）
+# æºåï¼æ¯ä¸ª cell ä¸ä¸ª SPIï¼Nangate45ï¼
 # ======================================================
 
 def build_src_spi_feats(src_spi_root: str) -> Tuple[Dict[str, Dict[str, float]], Dict[str, str]]:
     """
-    返回：
+    è¿åï¼
       feats_map: {cell_type: spi_feats_dict}
       mapping  : {cell_type: spi_path}
     """
@@ -196,39 +254,36 @@ def build_src_spi_feats(src_spi_root: str) -> Tuple[Dict[str, Dict[str, float]],
     for cell_type in TARGET_CELL_TYPES:
         rel_name = SRC_CELL_SPI_FILES.get(cell_type)
         if rel_name is None:
-            print(f"[warn] SRC: no SPI file mapping for cell {cell_type}, using ZERO features.")
+            # print(f"[warn] SRC: no SPI file mapping for cell {cell_type}, using ZERO features.")
             feats_map[cell_type] = dict(ZERO_SPI_FEATS)
             continue
 
         cands = list(root_path.rglob(rel_name))
         if not cands:
-            print(f"[warn] SRC: SPI file {rel_name} for cell {cell_type} not found, using ZERO features.")
+            # print(f"[warn] SRC: SPI file {rel_name} for cell {cell_type} not found, using ZERO features.")
             feats_map[cell_type] = dict(ZERO_SPI_FEATS)
             continue
 
         path = str(sorted(cands)[0])
         mapping[cell_type] = path
         feats_map[cell_type] = parse_spi_features(path)
-        print(f"[info] SRC: cell {cell_type} uses SPI: {path}")
+        # print(f"[info] SRC: cell {cell_type} uses SPI: {path}")
 
     return feats_map, mapping
 
 
 # ======================================================
-# 目标域：从 asap7sc6t_26_L_211010.sp 中直接按 cell 提取
+# ç®æ åï¼ä» asap7sc6t_26_L_211010.sp ä¸­ç´æ¥æ cell æå
 # ======================================================
 
-def build_tgt_spi_feats_from_big_sp(tgt_sp_root_or_file: str) -> Tuple[Dict[str, Dict[str, float]], Dict[str, str], str]:
+def build_tgt_spi_feats_from_big_sp(tgt_sp_root_or_file: str) -> Tuple[
+    Dict[str, Dict[str, float]], Dict[str, str], str]:
     """
-    目标域 ASAP7：
-    - 只给一个大的 asap7sc6t_26_L_211010.sp；
-    - 不再生成单独的 sp 文件；
-    - 直接在大文件中根据 subckt 名提取每个 cell 的 netlist 段并算特征。
-
-    返回：
+    ç®æ å ASAP7ï¼
+    è¿åï¼
       feats_map    : {cell_type: spi_feats_dict}
       subckt_map   : {cell_type: subckt_name}
-      sp_file_path : 使用的 SP 文件路径
+      sp_file_path : ä½¿ç¨ç SP æä»¶è·¯å¾
     """
     sp_file = choose_asap7_sp(tgt_sp_root_or_file)
     if not sp_file or not os.path.exists(sp_file):
@@ -244,44 +299,43 @@ def build_tgt_spi_feats_from_big_sp(tgt_sp_root_or_file: str) -> Tuple[Dict[str,
     for cell_type in TARGET_CELL_TYPES:
         subckt = ASAP7_CELL_SUBCKT.get(cell_type)
         if subckt is None:
-            print(f"[warn] TGT: no subckt mapping for cell {cell_type}, using ZERO features.")
+            # print(f"[warn] TGT: no subckt mapping for cell {cell_type}, using ZERO features.")
             feats_map[cell_type] = dict(ZERO_SPI_FEATS)
             continue
 
         sub_text = extract_subckt_text(sp_text, subckt)
         if not sub_text.strip():
-            print(f"[warn] TGT: subckt {subckt} for cell {cell_type} not found in {sp_file}, using ZERO features.")
+            # print(f"[warn] TGT: subckt {subckt} for cell {cell_type} not found in {sp_file}, using ZERO features.")
             feats_map[cell_type] = dict(ZERO_SPI_FEATS)
             continue
 
         feats_map[cell_type] = parse_spi_features_from_text(sub_text)
         subckt_map[cell_type] = subckt
-        print(f"[info] TGT: cell {cell_type} uses subckt {subckt} from {sp_file}")
+        # print(f"[info] TGT: cell {cell_type} uses subckt {subckt} from {sp_file}")
 
     return feats_map, subckt_map, sp_file
 
 
 # ======================================================
-# 行构造（加特征）
+# è¡æé ï¼å ç¹å¾ï¼
 # ======================================================
 
 def _build_enhanced_row(
-    tech: str,
-    cell_type: str,
-    cell_name: str,
-    from_pin: str,
-    to_pin: str,
-    pol: str,
-    slew: float,
-    cap: float,
-    voltage: float,
-    temp: float,
-    delay: float,
-    spi_feats: Dict[str, float],
+        tech: str,
+        cell_type: str,
+        cell_name: str,
+        from_pin: str,
+        to_pin: str,
+        pol: str,
+        slew: float,
+        cap: float,
+        voltage: float,
+        temp: float,
+        delay: float,
+        spi_feats: Dict[str, float],
 ) -> Dict[str, float]:
     """
-    构造一行样本，并加上一些“物理可解释”的组合特征。
-    同时把 cell_type/cell_name/from_pin/to_pin 写进 CSV，方便后续训练。
+    æé ä¸è¡æ ·æ¬ï¼å¹¶å ä¸ä¸äºâç©çå¯è§£éâçç»åç¹å¾ã
     """
     eps = 1e-12
 
@@ -331,6 +385,7 @@ def _build_enhanced_row(
         "wp_sum": wp_sum,
         "wn_sum": wn_sum,
         "is_inv": 1 if "INV" in cell_type else 0,
+        # ç®åæ è¯ç¬¦ï¼ä¸ä¸å®åç¡®ï¼ä»ä½åè
         "stack_pu": 1,
         "stack_pd": 1,
 
@@ -351,8 +406,7 @@ def _build_enhanced_row(
 
 def to_rows(tech: str, arc_dict: dict, spi_feats: Dict[str, float]):
     """
-    把某一条 timing arc（一个 cell 的 from_pin→to_pin）展平成多行记录。
-    arc_dict 是 parse_cell_arcs 返回的一个元素。
+    ææä¸æ¡ timing arcï¼ä¸ä¸ª cell ç from_pinâto_pinï¼å±å¹³æå¤è¡è®°å½ã
     """
     rows = []
     v = float(arc_dict["nom_voltage"])
@@ -371,6 +425,7 @@ def to_rows(tech: str, arc_dict: dict, spi_feats: Dict[str, float]):
                 delay = float(M[i, j])
                 if not np.isfinite(delay):
                     continue
+                # è¿æ»¤ææ¾ç¶éè¯¯çè´å»¶è¿ï¼æé¤ float è¯¯å·®ï¼
                 if delay < -1e-6:
                     continue
 
@@ -392,81 +447,63 @@ def to_rows(tech: str, arc_dict: dict, spi_feats: Dict[str, float]):
     return rows
 
 
-
 # ======================================================
-# Split helpers (group-aware)
+# æ°çååé»è¾ï¼Strict Cell-Based Split
 # ======================================================
 
-def _make_group_id(df: pd.DataFrame, group_cols):
-    """Create a stable string group id from selected columns."""
-    missing = [c for c in group_cols if c not in df.columns]
-    if missing:
-        raise ValueError(f"[split] missing columns for grouping: {missing}")
-    return df[group_cols].astype(str).agg("||".join, axis=1)
-
-def _split_group_list(groups, ratios=(0.7, 0.2, 0.1), seed=42):
-    """Split unique group ids into train/val/test lists. Robust for small N."""
-    groups = np.asarray(list(groups))
+def split_by_cell_type(df: pd.DataFrame, ratios=(0.7, 0.2, 0.1), seed=42) -> Tuple[List[str], List[str], List[str]]:
+    """
+    è¿å Train/Val/Test åå«ç cell_type åè¡¨
+    """
+    cell_types = df["cell_type"].unique()
     rng = np.random.RandomState(seed)
-    rng.shuffle(groups)
-    n = len(groups)
-    if n == 0:
-        return [], [], []
-    if n == 1:
-        return groups.tolist(), [], []
-    if n == 2:
-        return groups[:1].tolist(), [], groups[1:].tolist()
+    rng.shuffle(cell_types)
 
-    r_train, r_val, r_test = ratios
-    n_train = int(np.floor(r_train * n))
-    n_val = int(np.floor(r_val * n))
+    n = len(cell_types)
+    if n < 3:
+        print(f"[WARN] åªæ {n} ç§ Cellï¼æ æ³è¿è¡ææç Train/Val/Test ååï¼")
+        # ååºï¼å¨é¨æ¾å¥ Trainï¼é¿åæ¥éï¼ä½è¯ä¼°ä¼å¤±æ
+        return cell_types.tolist(), [], []
+
+    n_train = int(np.floor(ratios[0] * n))
+    n_val = int(np.floor(ratios[1] * n))
     n_test = n - n_train - n_val
 
-    # ensure non-empty train/test; val if possible
-    if n_train <= 0:
-        n_train = 1
-        n_test = n - n_train - n_val
-    if n_test <= 0:
+    # å¼ºå¶è³å°ä¿è¯ Test æ 1 ä¸ª (å¦æ Cell å¾å°)
+    if n_test < 1 and n > 2:
         n_test = 1
-        n_train = n - n_test - n_val
-    if n_val <= 0:
-        # try to give 1 group to val by stealing from train if possible
-        if n_train > 1:
-            n_val = 1
-            n_train = n - n_test - n_val
-        else:
-            n_val = 0
-            n_train = n - n_test
+        n_train = n - n_val - n_test
 
-    g_train = groups[:n_train]
-    g_val = groups[n_train:n_train + n_val]
-    g_test = groups[n_train + n_val:]
-    return g_train.tolist(), g_val.tolist(), g_test.tolist()
+    c_train = cell_types[:n_train]
+    c_val = cell_types[n_train:n_train + n_val]
+    c_test = cell_types[n_train + n_val:]
+
+    return c_train.tolist(), c_val.tolist(), c_test.tolist()
 
 
 # ======================================================
-# 主流程
+# ä¸»æµç¨
 # ======================================================
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--src_lib", required=True,
-                        help="Nangate45 lib 根目录（会递归找 .lib）")
+                        help="Nangate45 lib æ ¹ç®å½ï¼ä¼éå½æ¾ .libï¼")
     parser.add_argument("--tgt_lib", required=True,
-                        help="ASAP7 lib 根目录（会递归找 .lib）")
+                        help="ASAP7 lib æ ¹ç®å½ï¼ä¼éå½æ¾ .libï¼")
     parser.add_argument("--src_spi", required=True,
-                        help="Nangate45 SPI 根目录（每个 cell 一个网表）")
+                        help="Nangate45 SPI æ ¹ç®å½ï¼æ¯ä¸ª cell ä¸ä¸ªç½è¡¨ï¼")
     parser.add_argument("--tgt_sp", required=True,
-                        help="ASAP7 SP 根目录或文件（包含 asap7sc6t_26_L_211010.sp）")
+                        help="ASAP7 SP æ ¹ç®å½ææä»¶ï¼åå« asap7sc6t_26_L_211010.spï¼")
     parser.add_argument("--out_dir", required=True,
-                        help="输出目录")
+                        help="è¾åºç®å½")
     parser.add_argument("--target_label_ratio", type=float, default=0.9,
-                        help="ASAP7 目标域中用于有标签监督的比例")
+                        help="Train Set ä¸­ä¿çå¤å°æ¯ä¾çææ ç­¾æ°æ® (0.0~1.0)")
     args = parser.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
 
-    # ---------- 1) 找到所有 lib ----------
+    # ---------- 1) æ¾å°ææ lib ----------
     src_libs = collect_libs(args.src_lib)
     tgt_libs = collect_libs(args.tgt_lib)
 
@@ -474,161 +511,125 @@ def main():
     print(f"[info] ASAP7 libs found    : {len(tgt_libs)}")
 
     if len(tgt_libs) == 0:
-        raise SystemExit("[error] ASAP7 中没有找到任何 .lib，请确认目录。")
+        raise SystemExit("[error] ASAP7 ä¸­æ²¡ææ¾å°ä»»ä½ .libï¼è¯·ç¡®è®¤ç®å½ã")
 
-    # ---------- 2) 源域 SPI 特征 & 目标域 SP 特征 ----------
+    # ---------- 2) æºå SPI ç¹å¾ & ç®æ å SP ç¹å¾ ----------
     src_spi_feats_map, src_spi_map = build_src_spi_feats(args.src_spi)
     tgt_spi_feats_map, tgt_subckt_map, tgt_sp_file = build_tgt_spi_feats_from_big_sp(args.tgt_sp)
 
-    # ---------- 3) 遍历所有 lib，解析 5 类 cell ----------
+    # ---------- 3) éåææ lib ----------
     all_src_rows = []
     all_tgt_rows = []
 
-    # 源域（Nangate）
+    # æºåï¼Nangateï¼
     for path in src_libs:
         print(f"[info] parse SRC lib: {path}")
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
             text = f.read()
         arcs = parse_cell_arcs(text, target_cell_types=TARGET_CELL_TYPES)
-        print(f"   [info] arcs found: {len(arcs)}")
+        # print(f"   [info] arcs found: {len(arcs)}")
         for arc in arcs:
             cell_type = arc["cell_type"]
             spi_feats = src_spi_feats_map.get(cell_type, ZERO_SPI_FEATS)
             all_src_rows += to_rows("Nangate45", arc, spi_feats)
 
-    # 目标域（ASAP7）
+    # ç®æ åï¼ASAP7ï¼
     for path in tgt_libs:
         print(f"[info] parse TGT lib: {path}")
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
             text = f.read()
         arcs = parse_cell_arcs(text, target_cell_types=TARGET_CELL_TYPES)
-        print(f"   [info] arcs found: {len(arcs)}")
+        # print(f"   [info] arcs found: {len(arcs)}")
         for arc in arcs:
             cell_type = arc["cell_type"]
             spi_feats = tgt_spi_feats_map.get(cell_type, ZERO_SPI_FEATS)
             all_tgt_rows += to_rows("ASAP7", arc, spi_feats)
 
-    # ---------- 4) 保存 CSV & 7:2:1 划分 ----------
+    # ---------- 4) æ ¸å¿ï¼åºäº Cell Type çåå ----------
     if len(all_tgt_rows) == 0:
-        raise SystemExit("[error] 构建失败：ASAP7 目标域没有任何有效的样本。")
-
-    if len(all_src_rows) == 0:
-        print("[warn] 源域 Nangate45 没有成功解析到样本，不过目标域数据已构建，将继续保存。")
+        raise SystemExit("[error] æå»ºå¤±è´¥ï¼ASAP7 ç®æ åæ²¡æä»»ä½ææçæ ·æ¬ã")
 
     df_src = pd.DataFrame(all_src_rows) if len(all_src_rows) > 0 else pd.DataFrame()
     df_tgt = pd.DataFrame(all_tgt_rows)
 
-    # 打乱（保持可复现）
+    # å¨å±æä¹±ï¼æç ´ Slew/Cap çé¡ºåº
+    df_tgt = df_tgt.sample(frac=1, random_state=42).reset_index(drop=True)
     if not df_src.empty:
         df_src = df_src.sample(frac=1, random_state=42).reset_index(drop=True)
-    df_tgt = df_tgt.sample(frac=1, random_state=42).reset_index(drop=True)
 
-    # 目标域有标签 / 无标签划分（保持你原来的语义：按“样本行比例”抽取 labeled）
-    n_lab = max(1, int(len(df_tgt) * args.target_label_ratio))
-    df_tgt_l = df_tgt.iloc[:n_lab].copy()
-    df_tgt_u = df_tgt.iloc[n_lab:].copy()
+    # 1. è·å Train/Val/Test ç Cell åè¡¨
+    #    è¿éæ 6:2:2 æ 7:2:1 åå Cell ç§ç±»
+    train_cells, val_cells, test_cells = split_by_cell_type(df_tgt, ratios=(0.7, 0.2, 0.1), seed=42)
 
-    # 标记是否有标签
-    df_tgt_l["is_labeled"] = 1
-    df_tgt_u["is_labeled"] = 0
-    df_tgt["is_labeled"] = 0
-    df_tgt.loc[df_tgt_l.index, "is_labeled"] = 1
+    print("\n" + "=" * 50)
+    print("ãæ°æ®éååè¯¦æ (By Cell Type)ã")
+    print(f"  Train Cells ({len(train_cells)}): {train_cells}")
+    print(f"  Val   Cells ({len(val_cells)}): {val_cells}")
+    print(f"  Test  Cells ({len(test_cells)}): {test_cells}")
+    print("=" * 50 + "\n")
 
-    # ------------------------------------------------------
-    # 修改：labeled 集的 train/val/test 采用“按样本行数”严格 7:2:1 切分
-    # 说明：
-    # - 你反馈希望最终 CSV 行数比例就是 7:2:1（而不是按 timing-arc 分组）。
-    # - 因此这里改为对 df_tgt_l 直接随机打乱后按行数切分。
-    # 注意：这样做可能会让同一条 timing arc 同时出现在 train/val/test，
-    #       如果你更在意泛化评估的严格性，建议再切回按 arc 分组。
-    # ------------------------------------------------------
-    def _split_rows(df: pd.DataFrame, ratios=(0.7, 0.2, 0.1), seed=42):
-        df = df.sample(frac=1, random_state=seed).reset_index(drop=True)
-        n = len(df)
-        if n == 0:
-            return df.copy(), df.copy(), df.copy()
+    # 2. æ ¹æ® Cell åè¡¨ç­éæ°æ®
+    df_tgt_train_pool = df_tgt[df_tgt["cell_type"].isin(train_cells)].copy()
+    df_tgt_val = df_tgt[df_tgt["cell_type"].isin(val_cells)].copy()
+    df_tgt_test = df_tgt[df_tgt["cell_type"].isin(test_cells)].copy()
 
-        r_train, r_val, r_test = ratios
-        n_train = int(np.floor(r_train * n))
-        n_val = int(np.floor(r_val * n))
-        n_test = n - n_train - n_val
+    # 3. å¤çåçç£ Labeled / Unlabeled
+    #    æ³¨æï¼åªå¨ Train Set éå Maskï¼Val/Test å¿é¡»ä¿ç Label ä»¥ä¾è¯ä¼°
+    df_tgt_train_pool = df_tgt_train_pool.sample(frac=1, random_state=123).reset_index(drop=True)
+    n_train_total = len(df_tgt_train_pool)
+    n_train_labeled = int(n_train_total * args.target_label_ratio)
 
-        # ensure non-empty splits when possible
-        if n >= 3:
-            if n_train <= 0:
-                n_train = 1
-            if n_val <= 0:
-                n_val = 1
-            if n_test <= 0:
-                n_test = 1
-            # re-balance to sum to n (steal from train first)
-            total = n_train + n_val + n_test
-            if total > n:
-                overflow = total - n
-                take = min(overflow, max(0, n_train - 1))
-                n_train -= take
-                overflow -= take
-                if overflow > 0:
-                    take = min(overflow, max(0, n_val - 1))
-                    n_val -= take
-                    overflow -= take
-                # if still overflow, adjust test
-                if overflow > 0:
-                    n_test = max(1, n_test - overflow)
-            elif total < n:
-                n_train += (n - total)
+    df_tgt_train = df_tgt_train_pool.iloc[:n_train_labeled].copy()  # ææ ç­¾è®­ç»é
+    df_tgt_unlabeled = df_tgt_train_pool.iloc[n_train_labeled:].copy()  # æ æ ç­¾è®­ç»é
 
-        df_train = df.iloc[:n_train].copy()
-        df_val = df.iloc[n_train:n_train + n_val].copy()
-        df_test = df.iloc[n_train + n_val:].copy()
-        return df_train, df_val, df_test
+    # 4. æä¸ is_labeled æ è®°
+    df_tgt_train["is_labeled"] = 1
+    df_tgt_unlabeled["is_labeled"] = 0
+    df_tgt_val["is_labeled"] = 1
+    df_tgt_test["is_labeled"] = 1
 
-    df_tgt_train, df_tgt_val, df_tgt_test = _split_rows(df_tgt_l, ratios=(0.7, 0.2, 0.1), seed=42)
-# ===== 输出 =====
+    # ===== è¾åº =====
     if not df_src.empty:
         df_src.to_csv(os.path.join(args.out_dir, "src_delay.csv"), index=False)
 
-    # 兼容旧脚本：仍导出完整 labeled 集
-    df_tgt_l.to_csv(os.path.join(args.out_dir, "tgt_delay_labeled.csv"), index=False)
-
-    # 新增：train / val / test 三个文件（7:2:1）
+    # å¯¼åºæä»¶
     df_tgt_train.to_csv(os.path.join(args.out_dir, "tgt_train.csv"), index=False)
     df_tgt_val.to_csv(os.path.join(args.out_dir, "tgt_val.csv"), index=False)
     df_tgt_test.to_csv(os.path.join(args.out_dir, "tgt_test.csv"), index=False)
 
-    # 无标签：导出一个真正“不含 delay”的版本，避免后续半监督误用标签
-    df_tgt_u_x = df_tgt_u.drop(columns=["delay"], errors="ignore")
-    # 兼容旧脚本：仍然提供一个同名文件，但不含 delay
-    df_tgt_u_x.to_csv(os.path.join(args.out_dir, "tgt_delay_unlabeled.csv"), index=False)
-    # 新名字（更明确）
-    df_tgt_u_x.to_csv(os.path.join(args.out_dir, "tgt_unlabeled_x.csv"), index=False)
-    # 同时保留一个 debug 文件（含 delay），仅用于核对/分析，不建议训练代码读取
-    df_tgt_u.to_csv(os.path.join(args.out_dir, "tgt_delay_unlabeled_debug.csv"), index=False)
+    # æ æ ç­¾æ°æ®ï¼
+    # 1. tgt_unlabeled.csv (ä¸å« delayï¼æ¨¡æçå®åºæ¯)
+    # 2. tgt_unlabeled_debug.csv (å« delayï¼ç¨äº debug)
+    df_tgt_u_safe = df_tgt_unlabeled.drop(columns=["delay"], errors="ignore")
+    df_tgt_u_safe.to_csv(os.path.join(args.out_dir, "tgt_unlabeled.csv"), index=False)
+    df_tgt_unlabeled.to_csv(os.path.join(args.out_dir, "tgt_unlabeled_debug.csv"), index=False)
 
-    # 全集（含 delay）
-    df_tgt.to_csv(os.path.join(args.out_dir, "tgt_delay.csv"), index=False)
+    # å¨éæ°æ®å¤ä»½
+    df_tgt.to_csv(os.path.join(args.out_dir, "tgt_delay_full.csv"), index=False)
 
-    # 特征列：去掉 label / 域标记 / 一些纯 ID 字段
+    # ç¹å¾åè®°å½
     feature_cols = [
-        c for c in df_tgt.columns
+        c for c in df_tgt_train.columns
         if c not in ["delay", "tech", "is_labeled",
-                     "cell_name", "from_pin", "to_pin"]
+                     "cell_name", "from_pin", "to_pin", "group_id"]
     ]
 
     meta = {
-        # 源域：每个 cell 对应的独立 SPI 文件
-        "src_spi_by_cell": src_spi_map,          # {cell_type: spi_path}
-
-        # 目标域：大 SP 文件 + 每个 cell 对应的 subckt 名称
-        "tgt_sp_file": tgt_sp_file,              # asap7sc6t_26_L_211010.sp 路径
-        "tgt_subckt_by_cell": tgt_subckt_map,    # {cell_type: subckt_name}
-
-        "num_src": int(len(df_src)) if not df_src.empty else 0,
-        "num_tgt_l": int(len(df_tgt_l)),
-        "num_tgt_u": int(len(df_tgt_u)),
-        "num_tgt_train": int(len(df_tgt_train)),
-        "num_tgt_val": int(len(df_tgt_val)),
-        "num_tgt_test": int(len(df_tgt_test)),
+        "src_spi_by_cell": src_spi_map,
+        "tgt_sp_file": tgt_sp_file,
+        "tgt_subckt_by_cell": tgt_subckt_map,
+        "split_info": {
+            "train_cells": train_cells,
+            "val_cells": val_cells,
+            "test_cells": test_cells,
+        },
+        "stats": {
+            "num_src": len(df_src),
+            "num_tgt_train_labeled": len(df_tgt_train),
+            "num_tgt_train_unlabeled": len(df_tgt_unlabeled),
+            "num_tgt_val": len(df_tgt_val),
+            "num_tgt_test": len(df_tgt_test),
+        },
         "feature_cols": feature_cols,
         "cell_types": TARGET_CELL_TYPES,
     }
@@ -637,9 +638,8 @@ def main():
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
 
-    print("[info] DONE — 数据集构建成功！")
-    print(f"[info] feature_dim = {len(feature_cols)}")
-    print(meta)
+    print("[info] DONE â æ°æ®éæå»ºæåï¼Strict Cell-Based Splitï¼ï¼")
+    print(f"[info] Check output in: {args.out_dir}")
 
 
 if __name__ == "__main__":

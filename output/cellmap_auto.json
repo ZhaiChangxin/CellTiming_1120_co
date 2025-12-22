@@ -1,0 +1,55 @@
+{
+  "INVX1": [
+    "INVx1_ASAP7_6t_L",
+    "INVx11_ASAP7_6t_L",
+    "INVx13_ASAP7_6t_L",
+    "INVx2_ASAP7_6t_L",
+    "INVx3_ASAP7_6t_L",
+    "INVx4_ASAP7_6t_L",
+    "INVx5_ASAP7_6t_L",
+    "INVx6_ASAP7_6t_L",
+    "INVx8_ASAP7_6t_L",
+    "INVxp5_ASAP7_6t_L"
+  ],
+  "INVX2": [
+    "INVx2_ASAP7_6t_L",
+    "INVx11_ASAP7_6t_L",
+    "INVx13_ASAP7_6t_L",
+    "INVx1_ASAP7_6t_L",
+    "INVx3_ASAP7_6t_L",
+    "INVx4_ASAP7_6t_L",
+    "INVx5_ASAP7_6t_L",
+    "INVx6_ASAP7_6t_L",
+    "INVx8_ASAP7_6t_L",
+    "INVxp5_ASAP7_6t_L"
+  ],
+  "NANDX1": [
+    "NAND2x1_ASAP7_6t_L",
+    "NAND2x1p5_ASAP7_6t_L",
+    "NAND2x2_ASAP7_6t_L",
+    "NAND2xp5_ASAP7_6t_L",
+    "NAND2xp5R_ASAP7_6t_L",
+    "NAND3x1_ASAP7_6t_L",
+    "NAND3x2_ASAP7_6t_L",
+    "NAND3xp33_ASAP7_6t_L",
+    "NAND3xp33R_ASAP7_6t_L",
+    "NAND4xp25_ASAP7_6t_L"
+  ],
+  "NORX1": [
+    "NOR2x1_ASAP7_6t_L",
+    "NOR2x2_ASAP7_6t_L",
+    "NOR2x2R_ASAP7_6t_L",
+    "NOR2xp5_ASAP7_6t_L",
+    "NOR3x1_ASAP7_6t_L",
+    "NOR3x1f_ASAP7_6t_L",
+    "NOR3x2_ASAP7_6t_L",
+    "NOR3xp33_ASAP7_6t_L",
+    "NOR4x3f_ASAP7_6t_L",
+    "NOR4xp25_ASAP7_6t_L"
+  ],
+  "XORX1": [
+    "XOR2x2_ASAP7_6t_L",
+    "XOR2xp5_ASAP7_6t_L",
+    "XOR2xp5r_ASAP7_6t_L"
+  ]
+}

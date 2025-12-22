@@ -1,0 +1,303 @@
+{
+  "tag": "tgt_val",
+  "lib": "ASAP7",
+  "built": 0,
+  "skipped": 59,
+  "errors": [
+    {
+      "idx": 0,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 1,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 2,
+      "cell_type": "NANDX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 3,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 4,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 5,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 6,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 7,
+      "cell_type": "NANDX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 8,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 9,
+      "cell_type": "INVX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 10,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 11,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 12,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 13,
+      "cell_type": "INVX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 14,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 15,
+      "cell_type": "NANDX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 16,
+      "cell_type": "NANDX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 17,
+      "cell_type": "NANDX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 18,
+      "cell_type": "NANDX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 19,
+      "cell_type": "NANDX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 20,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 21,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 22,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 23,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 24,
+      "cell_type": "NANDX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 25,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 26,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 27,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 28,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 29,
+      "cell_type": "INVX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 30,
+      "cell_type": "NANDX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 31,
+      "cell_type": "INVX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 32,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 33,
+      "cell_type": "INVX2",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 34,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 35,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 36,
+      "cell_type": "INVX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 37,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 38,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 39,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 40,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 41,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 42,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 43,
+      "cell_type": "INVX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 44,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 45,
+      "cell_type": "NANDX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 46,
+      "cell_type": "NANDX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 47,
+      "cell_type": "INVX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 48,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 49,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 50,
+      "cell_type": "INVX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 51,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 52,
+      "cell_type": "INVX2",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 53,
+      "cell_type": "INVX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 54,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 55,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 56,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 57,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    },
+    {
+      "idx": 58,
+      "cell_type": "NORX1",
+      "err": "unhashable type: 'list'"
+    }
+  ]
+}
