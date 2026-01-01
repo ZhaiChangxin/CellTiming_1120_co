@@ -73,11 +73,15 @@
       "INVX1",
       "BUFX2",
       "NOR3X1",
-      "OR2X4",
+      "OR2X4"
+    ],
+    "val_cells": [
       "AND3X4",
       "INVX8",
       "NOR2X1",
-      "NOR3X2",
+      "NOR3X2"
+    ],
+    "test_cells": [
       "NAND2X1",
       "OR4X1",
       "OR3X4",
@@ -90,17 +94,13 @@
       "AND4X2",
       "INVX2",
       "NAND3X1",
-      "NOR2X2"
-    ],
-    "val_cells": [
+      "NOR2X2",
       "AND2X4",
       "OR3X2",
       "AND2X2",
       "AND3X1",
       "NAND2X2",
-      "AND4X1"
-    ],
-    "test_cells": [
+      "AND4X1",
       "OR3X1",
       "OR4X2",
       "BUFX8"
@@ -108,35 +108,34 @@
   },
   "stats": {
     "num_src": 7607,
-    "num_tgt_train_labeled": 1440,
-    "num_tgt_train_unlabeled": 3360,
-    "num_tgt_val": 1568,
-    "num_tgt_test": 784
+    "num_tgt_train_labeled": 686,
+    "num_tgt_train_unlabeled": 0,
+    "num_tgt_val": 882,
+    "num_tgt_test": 5584
   },
   "feature_cols": [
     "cell_type",
     "pol",
-    "slew",
-    "cap",
     "voltage",
     "temp",
-    "wp_over_wn",
     "wp_sum",
     "wn_sum",
-    "is_inv",
-    "stack_pu",
-    "stack_pd",
+    "slew",
+    "cap",
     "log_slew",
     "log_cap",
     "req_p",
     "req_n",
     "rc_p",
     "rc_n",
-    "rc_eff",
     "req_eff",
+    "rc_eff",
+    "wp_over_wn",
+    "pn_balance",
+    "is_inv",
+    "stack_pd",
     "inv_v",
-    "inv_temp",
-    "pn_balance"
+    "inv_temp"
   ],
   "cell_types": [
     "AND2X2",

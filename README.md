@@ -1,5 +1,5 @@
 
-# Cell-Level Timing MVP (Nangate45 → ASAP7) — HGAT-ready
+# Cell-Level Timing MVP (Nangate45 → ASAP7)
 
 ## Quick start
 
@@ -7,34 +7,33 @@
 ```
 data/
   lib/
-    Nangate45/INVX1.lib
-    ASAP7/INVX1.lib
+    Nangate45/NangateOpenCellLibrary_typical.lib
+    ASAP7/asap7sc6t_INVBUF_LVT_TT_nldm_211010.lib
+    ASAP7/asap7sc6t_SIMPLE_LVT_TT_nldm_211010.lib
   spi/
-    Nangate45/INVX1.spi   # Nangate45 SPICE (optional for features/HGAT)
-    ASAP7/INVX1.sp        # ASAP7 PEX/SPICE (optional for features/HGAT)
+    Nangate45/INVX1.spi...   
+    ASAP7/asap7sc6t_26_L_211010.sp        
 ```
 
 2) Build datasets:
 ```
-python scripts/build_dataset.py --src_lib data/lib/Nangate45/INVX1.lib --tgt_lib data/lib/ASAP7/INVX1.lib   --src_spi data/spi/Nangate45/INVX1.spi --tgt_spi data/spi/ASAP7/INVX1.sp   --out_dir outputs --grid_slew 12 --grid_cap 12 --target_label_ratio 0.1
+python3 scripts/build_dataset.py --src_lib data/lib/Nangate45 --tgt_lib data/lib/ASAP7 --src_spi data/spi/Nangate45 --tgt_sp data/spi/ASAP7 --out_dir output --target_label_ratio 1.0
 ```
 
-3) Baseline train (no HGAT):
+3) Baseline train (MLP):
 ```
-python scripts/train.py --data_dir outputs --epochs 120 --batch 256 --lr 2e-3 --hid 128 --cmd_k 5
+ python3 scripts/train_mlp.py   --data_dir output   --mode joint   --epochs 50   --batch 256   --lr 0.001   --device cuda
 ```
 
-4) HGAT-enabled train（异构图，不引入路径注意力）:
+4) HGAT-enabled train（HGAT）:
 ```
-python scripts/train.py --data_dir outputs --epochs 120 --batch 256 --lr 2e-3 --hid 128 --cmd_k 5   --use_hgat --src_spice data/spi/Nangate45/INVX1.spi --tgt_spice data/spi/ASAP7/INVX1.sp
+ python3 scripts/train_hgat.py   --data_dir output   --save_dir output   --tgt_spice data/spi/ASAP7/asap7sc6t_26_L_211010.sp   --s1_epochs 100   --s2_epochs 100   --lr 1e-3   --auto_lr   --lr_patience 8   --lr_factor 0.5   --min_lr 1e-6   --early_patience 30   --grad_clip 1.0
 ```
 
 5) Evaluate:
 ```
-python scripts/eval.py --data_dir outputs --ckpt outputs/ckpt.pt
-```
+ python3 scripts/eval_hgat.py --data_dir output --ckpt output/ckpt_transfer_best.pt --tgt_spice data/spi/ASAP7/asap7sc6t_26_L_211010.sp
+ python3 scripts/eval_mlp.py   --data_dir output   --csv_name tgt_test.csv   --ckpt_name mlp_ckpt.pt
+ ```
 
-### Notes
-- `.lib` 解析已适配 **Nangate45 (INV_X1)** 与 **ASAP7 (INVx1_ASAP7_6t_R)** 等命名差异；自动定位 `pin(Y/ZN) -> timing(related_pin="A")`。
-- `.sp/.spi` 解析会抓取 M 行中 **W/L**（自动识别单位），并构建 **NET/PMOS/NMOS** 的最小异构图；HGAT 在训练时端到端更新。
-- HGAT 需要安装 DGL（CPU/GPU 任一版本均可）。
+

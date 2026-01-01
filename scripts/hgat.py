@@ -82,17 +82,20 @@ def build_dgl_graph_from_devs(devs, top_pins):
 
     def mos_feats(list_dev):
         arr = []
+        # ¼òµ¥µÄÓ²±àÂë¹éÒ»»¯£¬»ùÓÚ¾­ÑéÖµ
+        # Nangate45: L_min ~ 50nm = 0.05um
+        # ASAP7: L_min ~ 20nm (Gate length) »ò 7nm (Fin width)
+        # ½¨Òé: ¶ÔÊý±ä»»¿ÉÄÜ±ÈÏßÐÔËõ·Å¸üÂ³°ô
         for d in list_dev:
-            # 修改：将单位从 米(m) 转换为 微米(um)，放大 1e6 倍
-            # 原始: 1.8e-7 -> 神经网络认为是 0
-            # 修改: 0.18   -> 神经网络认为是有意义的特征
-            raw_W = d["W"] if d["W"] is not None else 0.0
-            raw_L = d["L"] if d["L"] is not None else 0.0
+            raw_W = d["W"] if d["W"] is not None else 1e-7
+            raw_L = d["L"] if d["L"] is not None else 1e-7
 
-            W = raw_W * 1e6
-            L = raw_L * 1e6
+            # ·½°¸ A: È¡¶ÔÊý (Log-Scale)£¬¶Ô¿çÊýÁ¿¼¶²îÒì¼«ÆäÓÐÐ§
+            # ¼ÓÉÏ 1e-9 ·ÀÖ¹ log(0)
+            w_feat = np.log10(raw_W + 1e-9)
+            l_feat = np.log10(raw_L + 1e-9)
 
-            arr.append([W, L])
+            arr.append([w_feat, l_feat])
         if len(arr)==0:
             return torch.zeros((0,2), dtype=torch.float32)
         return torch.tensor(np.array(arr, dtype=np.float32))

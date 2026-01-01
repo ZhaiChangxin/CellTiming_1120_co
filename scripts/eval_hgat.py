@@ -9,16 +9,16 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 
-# ----------------- èªå®ä¹æ¨¡åå¯¼å¥ -----------------
+# ----------------- ×Ô¶¨ÒåÄ£¿éµ¼Èë -----------------
 from model import DisentangledRegressor
 from hgat import HGATDesignEncoder, build_dgl_graph_from_devs
 from spi2graph import parse_transistors_spice, parse_top_subckt_pins
 
-# ====== ç¹å¾åå®ä¹ (ä¿æä¸ train_hgat.py ä¸è´) ======
+# ====== ÌØÕ÷ÁÐ¶¨Òå (±£³ÖÓë train_hgat.py Ò»ÖÂ) ======
 NUMERIC_COLS = [
     "slew", "cap", "voltage", "temp",
     "wp_over_wn", "wp_sum", "wn_sum",
-    "is_inv", "stack_pu", "stack_pd",
+    "is_inv",
     "log_slew", "log_cap",
     "req_p", "req_n",
     "rc_p", "rc_n",
@@ -30,11 +30,8 @@ NUMERIC_COLS = [
 TARGET_COL = "delay"
 
 
-# ====== 1. æ°æ®å è½½ä¸é¢å¤çå·¥å· (å¤ç¨ train_hgat.py é»è¾) ======
+# ====== 1. Êý¾Ý¼ÓÔØÓëÔ¤´¦Àí¹¤¾ß ======
 def load_scalers(data_dir):
-    """
-    å è½½è®­ç»æ¶çæçç»è®¡æ°æ®ï¼ç¡®ä¿è¯ä¼°æ¶çå½ä¸åæ åä¸è®­ç»å®å¨ä¸è´ã
-    """
     ss_path = os.path.join(data_dir, "scaler_stats.json")
     ys_path = os.path.join(data_dir, "y_scaler.json")
     if not os.path.exists(ss_path) or not os.path.exists(ys_path):
@@ -45,7 +42,6 @@ def load_scalers(data_dir):
 
     x_mean = np.array([stats["mean"].get(c, 0.0) for c in NUMERIC_COLS], dtype=np.float32)
     x_std = np.array([stats["std"].get(c, 1.0) for c in NUMERIC_COLS], dtype=np.float32)
-    # é²æ­¢é¤é¶ï¼ä¸è®­ç»é»è¾ä¿æä¸è´
     x_std = np.where(x_std < 1e-12, 1.0, x_std).astype(np.float32)
 
     y_mean, y_std = float(yinfo["mean"]), float(yinfo["std"])
@@ -86,7 +82,6 @@ def _infer_hgat_hid_from_state(sd: dict) -> int:
 
 
 def _reshape_main_net_to_ckpt(model, ckpt_model):
-    """å¦æ ckpt ç»´åº¦ä¸ args ä¸ä¸è´ï¼å¼ºå¶è°æ´ model ç»æ"""
     import torch.nn as nn
     if "enc.0.weight" in ckpt_model:
         model.enc[0] = nn.Linear(ckpt_model["enc.0.weight"].shape[1], ckpt_model["enc.0.weight"].shape[0])
@@ -112,7 +107,6 @@ class EvalDataset(Dataset):
             raise FileNotFoundError(f"File not found: {csv_path}")
         df = pd.read_csv(csv_path)
 
-        # è¡¥å¨é»è¾ä¸ train_hgat.py _ensure_pol_bit / _ensure_numeric_cols ä¸è´
         if "pol_bit" not in df.columns:
             if "pol" in df.columns:
                 df["pol_bit"] = (df["pol"].astype(str) == "rise").astype(np.float32)
@@ -148,7 +142,7 @@ def eval_collate(batch):
     return xs, ys, cts
 
 
-# ====== 3. Embedding é¢è®¡ç® ======
+# ====== 3. Embedding Ô¤¼ÆËã ======
 def prepare_target_embeddings(data_dir, tgt_spice_path, enc, device):
     meta_path = os.path.join(data_dir, "meta.json")
     with open(meta_path, "r") as f:
@@ -156,7 +150,6 @@ def prepare_target_embeddings(data_dir, tgt_spice_path, enc, device):
 
     tgt_map = meta.get("tgt_subckt_by_cell", {})
     if not tgt_map:
-        print("[Warn] meta.json missing 'tgt_subckt_by_cell'")
         return {}
 
     if not os.path.exists(tgt_spice_path):
@@ -169,7 +162,6 @@ def prepare_target_embeddings(data_dir, tgt_spice_path, enc, device):
                 tgt_spice_path = cand
 
     if not os.path.exists(tgt_spice_path):
-        print(f"[Warn] Target SPICE not found: {tgt_spice_path}")
         return {}
 
     print(f"[Info] Parsing Target SPICE: {tgt_spice_path}")
@@ -232,7 +224,7 @@ def prepare_source_embeddings(data_dir, enc, device):
     return z_dict
 
 
-# ====== 4. æ§è¡åæ¬¡è¯ä¼° ======
+# ====== 4. Ö´ÐÐµ¥´ÎÆÀ¹À ======
 def run_eval_single(csv_path, z_map, tag, model, x_mean_t, x_std_t, y_mean, y_std, device, design_dim):
     if csv_path is None or not os.path.exists(csv_path):
         return
@@ -247,7 +239,6 @@ def run_eval_single(csv_path, z_map, tag, model, x_mean_t, x_std_t, y_mean, y_st
     with torch.no_grad():
         for xb, yb, cts in dl:
             xb = xb.to(device)
-            # å³é®ï¼åºç¨è®­ç»æ¶çå½ä¸ååæ°
             xb = (xb - x_mean_t) / x_std_t
 
             z_list = []
@@ -259,12 +250,9 @@ def run_eval_single(csv_path, z_map, tag, model, x_mean_t, x_std_t, y_mean, y_st
             zb = torch.cat(z_list, dim=0)
 
             mu, _, _, _ = model(xb, zb)
-
-            # å³é®ï¼åºç¨è®­ç»æ¶ç Tanh ç¼©æ¾é»è¾ (train_hgat.py eval_mae_on_dataset)
             max_abs = 10.0
             mu = max_abs * torch.tanh(mu / max_abs)
 
-            # åå½ä¸å
             mu_np = mu.cpu().numpy()
             mu_ps = mu_np * y_std + y_mean
             preds.append(mu_ps)
@@ -276,7 +264,6 @@ def run_eval_single(csv_path, z_map, tag, model, x_mean_t, x_std_t, y_mean, y_st
 
     if len(gts) > 0:
         y_true = np.concatenate(gts, axis=0)
-
         mae = mean_absolute_error(y_true, y_pred)
         mse = mean_squared_error(y_true, y_pred)
         r2 = r2_score(y_true, y_pred)
@@ -297,7 +284,7 @@ def run_eval_single(csv_path, z_map, tag, model, x_mean_t, x_std_t, y_mean, y_st
     out_df.to_csv(out_path, index=False)
 
 
-# ====== 5. Checkpoint è¯ä¼° Session ======
+# ====== 5. Checkpoint ÆÀ¹À Session ======
 def evaluate_checkpoint_session(
         ckpt_path,
         tag_prefix,
@@ -307,9 +294,12 @@ def evaluate_checkpoint_session(
         eval_flags,
         csv_paths
 ):
+    if not eval_flags or not any(eval_flags.values()):
+        return
+
     print(f"\n{'#' * 60}")
     print(f"[Session] Checkpoint: {ckpt_path}")
-    print(f"[Session] Prefix: {tag_prefix}")
+    print(f"[Session] Description: {tag_prefix if tag_prefix else 'Main Transfer Model'}")
     print(f"{'#' * 60}\n")
 
     try:
@@ -319,27 +309,21 @@ def evaluate_checkpoint_session(
     except:
         pass
 
-    # å è½½æé
     try:
         state = torch.load(ckpt_path, map_location=device, weights_only=True)
     except:
         state = torch.load(ckpt_path, map_location=device, weights_only=False)
 
-    ckpt_model = state.get("model", state)  # å¼å®¹åªä¿å­ model state_dict çæåµ
+    ckpt_model = state.get("model", state)
     ckpt_enc = state.get("enc", None)
-
-    # è·åç»´åº¦ä¿¡æ¯ï¼é»è®¤ 64
     design_dim = int(state.get("design_dim", args.design_dim))
-    # è·å in_map, é»è®¤ä¸ºè®­ç»ä»£ç ä¸­çå®ä¹
     in_map = state.get("hgat_in_dim_map", {"NET": 4, "PMOS": 2, "NMOS": 2})
 
-    # åå§å Encoder
     enc_hid = _infer_hgat_hid_from_state(ckpt_enc)
     enc = HGATDesignEncoder(in_dim_map=in_map, hid=enc_hid, out=design_dim).to(device)
     if ckpt_enc:
         enc.load_state_dict(ckpt_enc, strict=True)
 
-    # åå§å Regressor
     model = DisentangledRegressor(
         in_dim=len(NUMERIC_COLS),
         hid=args.hid,
@@ -352,18 +336,19 @@ def evaluate_checkpoint_session(
     model = model.to(device)
     model.eval()
 
-    # åå¤ Z
     z_src = None
     z_tgt = None
 
-    if eval_flags['src']:
+    # Ö»ÔÚÐèÒªÊ±¼ÓÔØ Source Embedding
+    if eval_flags.get('src', False):
         z_src = prepare_source_embeddings(args.data_dir, enc, device)
 
-    need_tgt = any([eval_flags[k] for k in ['tgt_train', 'tgt_val', 'tgt_test', 'tgt_custom']])
+    # Ö»ÔÚÐèÒªÊ±¼ÓÔØ Target Embedding
+    tgt_keys = ['tgt_train', 'tgt_val', 'tgt_test', 'tgt_custom']
+    need_tgt = any([eval_flags.get(k, False) for k in tgt_keys])
     if need_tgt:
         z_tgt = prepare_target_embeddings(args.data_dir, args.tgt_spice, enc, device)
 
-    # æ§è¡è¯ä¼°
     tasks = [
         ('src', 'Source', z_src),
         ('tgt_train', 'Target_Train', z_tgt),
@@ -373,7 +358,7 @@ def evaluate_checkpoint_session(
     ]
 
     for flag_key, suffix, z_map in tasks:
-        if eval_flags[flag_key]:
+        if eval_flags.get(flag_key, False):
             run_eval_single(
                 csv_path=csv_paths[flag_key],
                 z_map=z_map,
@@ -399,7 +384,6 @@ def main():
     args = ap.parse_args()
     device = torch.device(args.device)
 
-    # 1. å è½½ä¸è®­ç»ä¸è´ç Scalers
     print("[Info] Loading scalers...")
     try:
         x_mean, x_std, y_mean, y_std = load_scalers(args.data_dir)
@@ -410,7 +394,7 @@ def main():
     x_mean_t = torch.from_numpy(x_mean).to(device)
     x_std_t = torch.from_numpy(x_std).to(device)
 
-    # 2. å®ä¹è·¯å¾ä¸ Flags
+    # 2. ¶¨ÒåÂ·¾¶Óë¿ÉÓÃÐÔ¼ì²é
     csv_paths = {
         'src': os.path.join(args.data_dir, "src_delay.csv"),
         'tgt_train': os.path.join(args.data_dir, "tgt_train.csv"),
@@ -419,42 +403,54 @@ def main():
         'tgt_custom': args.csv
     }
 
-    eval_flags = {k: False for k in csv_paths}
-
+    # »ù´¡¿ÉÓÃµÄ flags
+    available_flags = {k: False for k in csv_paths}
     if args.csv:
-        eval_flags['tgt_custom'] = True
+        available_flags['tgt_custom'] = True
     else:
-        if os.path.exists(csv_paths['src']): eval_flags['src'] = True
-        if os.path.exists(csv_paths['tgt_train']): eval_flags['tgt_train'] = True
-        if os.path.exists(csv_paths['tgt_val']): eval_flags['tgt_val'] = True
-        if os.path.exists(csv_paths['tgt_test']): eval_flags['tgt_test'] = True
+        if os.path.exists(csv_paths['src']): available_flags['src'] = True
+        if os.path.exists(csv_paths['tgt_train']): available_flags['tgt_train'] = True
+        if os.path.exists(csv_paths['tgt_val']): available_flags['tgt_val'] = True
+        if os.path.exists(csv_paths['tgt_test']): available_flags['tgt_test'] = True
 
-    if not any(eval_flags.values()):
-        print("[Error] No CSV files found to evaluate.")
-        return
+    # 3. ¡¾ºËÐÄÂß¼­ÐÞ¸Ä¡¿ÆÀ¹À·¶Î§·ÖÀë
 
-    # 3. è¯ä¼° Main Checkpoint (éå¸¸æ¯ Transferåçæ¨¡å)
+    # ²ßÂÔ A: ¶ÔÓÚ Main Checkpoint (Í¨³£ÊÇ Transfer Ä£ÐÍ)£¬ÎÒÃÇÍ¨³£Ö»¹ØÐÄËüÔÚ Target Êý¾ÝÉÏµÄ±íÏÖ
+    # ³ý·ÇÓÃ»§Ã»´« src_ckpt£¬»òÕßÇ¿ÖÆÏëÒª¿´ source ÉÏµÄ±íÏÖ(´Ë´¦ÎªÁË½â¾öÄãµÄÎÊÌâ£¬Ä¬ÈÏ¹Ø±Õ)
+    flags_for_main = available_flags.copy()
+    flags_for_main['src'] = False  # <--- ¹Ø¼ü£º½ûÖ¹ÓÃ Transfer Ä£ÐÍÅÜ Source Êý¾Ý
+
+    # ²ßÂÔ B: ¶ÔÓÚ Source Checkpoint (Pretrain Ä£ÐÍ)£¬ÎÒÃÇÖ»¹ØÐÄËüÔÚ Source Êý¾ÝÉÏµÄ±íÏÖ
+    flags_for_src = {k: False for k in available_flags}
+    flags_for_src['src'] = available_flags['src']  # <--- ¹Ø¼ü£ºÖ»¿ªÆô Source Êý¾Ý
+
+    # 4. Ö´ÐÐÆÀ¹À
+
+    # (A) ÆÀ¹À Main Checkpoint (Target Domain)
     evaluate_checkpoint_session(
         ckpt_path=args.ckpt,
-        tag_prefix="",
+        tag_prefix="",  # Êä³öÀï»áÏÔÊ¾ Target_Train µÈ
         args=args,
         device=device,
         x_mean_t=x_mean_t, x_std_t=x_std_t, y_mean=y_mean, y_std=y_std,
-        eval_flags=eval_flags,
+        eval_flags=flags_for_main,
         csv_paths=csv_paths
     )
 
-    # 4. (å¯é) è¯ä¼° Source Checkpoint (éå¸¸æ¯ Pretrainæ¨¡å)
+    # (B) ÆÀ¹À Source Checkpoint (Source Domain)
     if args.src_ckpt and os.path.exists(args.src_ckpt):
         evaluate_checkpoint_session(
             ckpt_path=args.src_ckpt,
-            tag_prefix="SrcBase_",
+            tag_prefix="SrcBase_",  # Êä³öÀï»áÏÔÊ¾ SrcBase_Source
             args=args,
             device=device,
             x_mean_t=x_mean_t, x_std_t=x_std_t, y_mean=y_mean, y_std=y_std,
-            eval_flags=eval_flags,
+            eval_flags=flags_for_src,
             csv_paths=csv_paths
         )
+    else:
+        if available_flags['src']:
+            print("[Info] Source checkpoint not provided (--src_ckpt), skipping Source evaluation.")
 
 
 if __name__ == "__main__":

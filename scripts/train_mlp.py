@@ -18,9 +18,6 @@ BASE_NUMERIC_COLS = [
     "wp_over_wn", "wp_sum", "wn_sum",
     "is_inv", "stack_pu", "stack_pd",
     "log_slew", "log_cap",
-    "req_p", "req_n",
-    "rc_p", "rc_n",
-    "rc_eff", "req_eff",
     "inv_v", "inv_temp",
     "pn_balance",
     "pol_bit",   # 由 pol 构造（rise=1, fall=0）
@@ -179,7 +176,7 @@ def main():
 
     # ---------- 1) 读数据 ----------
     src_csv = os.path.join(args.data_dir, "src_delay.csv")
-    tgt_l_csv = os.path.join(args.data_dir, "tgt_delay_labeled.csv")
+    tgt_l_csv = os.path.join(args.data_dir, "tgt_train.csv")
 
     df_src = pd.read_csv(src_csv)
     df_tgt_l = pd.read_csv(tgt_l_csv)
@@ -211,7 +208,7 @@ def main():
         else:
             raise ValueError("unknown mode")
 
-        # ⚠️ 归一化参数用 SRC+TGT_L 的联合数据（加好特征之后的 df_all_feat）
+        # ⚠ 归一化参数用 SRC+TGT_L 的联合数据（加好特征之后的 df_all_feat）
         x_all = df_all_feat[numeric_cols].astype(np.float32)
         y_all = df_all_feat[[TARGET_COL]].astype(np.float32)
 

@@ -17,7 +17,7 @@ from losses import total_loss
 NUMERIC_COLS = [
     "slew", "cap", "voltage", "temp",
     "wp_over_wn", "wp_sum", "wn_sum",
-    "is_inv", "stack_pu", "stack_pd",
+    "is_inv",
     "log_slew", "log_cap",
     "req_p", "req_n",
     "rc_p", "rc_n",
@@ -427,12 +427,16 @@ def run_stage2_transfer(args, device, src_ckpt_path, x_mean, x_std, y_mean, y_st
     model = DisentangledRegressor(in_dim=len(NUMERIC_COLS), hid=args.hid, design_dim_override=design_dim).to(device)
     model.load_state_dict(state["model"], strict=False)
 
-    # freeze encoder
-    print("[S2] Freeze HGAT encoder.")
-    for p in enc.parameters():
-        p.requires_grad = False
+    # unfreeze encoder
+    print("[S2] Fine-tuning HGAT encoder (Unfrozen).")
+    optimizer = optim.Adam([
+        # 1. Regressor (MLP): Î¬³ÖÔ­ÓÐµÄÑ§Ï°ÂÊ²ßÂÔ (args.lr * 0.5)
+        {'params': model.parameters(), 'lr': args.lr * 0.5},
 
-    optimizer = optim.Adam(model.parameters(), lr=args.lr * 0.5)
+        # 2. Encoder (HGAT): Ê¹ÓÃ·Ç³£Ð¡µÄÑ§Ï°ÂÊ (ÀýÈç 1% ~ 10% µÄÖ÷Ñ§Ï°ÂÊ)
+        #    ÕâÑù¿ÉÒÔÎ¢µ÷ÌØÕ÷£¬¶ø²»ÊÇÆÆ»µÔ¤ÑµÁ·µÄ½á¹¹
+        {'params': enc.parameters(), 'lr': args.lr * 0.01}
+    ])
     scheduler = None
     if args.auto_lr:
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -470,6 +474,7 @@ def run_stage2_transfer(args, device, src_ckpt_path, x_mean, x_std, y_mean, y_st
 
     for epoch in range(args.s2_epochs):
         model.train()
+        enc.train()
         epoch_loss = 0.0
 
         for xb, yb, cts in train_dl:
